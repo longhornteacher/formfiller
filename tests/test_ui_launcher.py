@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / 'tools' / 'Launch-WebUI.ps1'
 STUB_UI = """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$WebArgs)
 ConvertTo-Json -InputObject @($WebArgs) | Set-Content (Join-Path $PSScriptRoot 'launched.json')
+@{workspace=$env:FORM_FILLER_WORKSPACE;runtime=$env:FORM_FILLER_RUNTIME;installed_app=$env:FORM_FILLER_INSTALLED_APP} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 'resolved.json')
 exit 0
 """
 
@@ -33,11 +34,14 @@ class WebUILauncherTests(unittest.TestCase):
             '-RepositoryRoot', str(self.repo), '-AppDataRoot', str(self.local)],
             capture_output=True, text=True, timeout=30)
 
+    def mapping(self, installed):
+        return {'installed_app': str(installed), 'workspace': str(self.root / 'private'), 'runtime': str(self.root / 'runtime')}
+
     def test_existing_install_opens_webui_without_build_or_submission(self):
         installed = self.root / 'installed'
         installed.mkdir()
         (installed / 'Run-FormFillerPrivate.ps1').write_text(STUB_UI)
-        (self.app / 'paths.json').write_text(json.dumps({'installed_app': str(installed)}))
+        (self.app / 'paths.json').write_text(json.dumps(self.mapping(installed)))
         result = self.launch()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads((installed / 'launched.json').read_text(encoding='utf-8-sig')), ['--open'])
@@ -61,10 +65,30 @@ New-Item -ItemType Directory -Path $Destination -Force | Out-Null
         self.assertFalse((self.app / 'paths.json').exists())
 
     def test_invalid_existing_install_never_reinstalls_or_exposes_path(self):
-        (self.app / 'paths.json').write_text(json.dumps({'installed_app': str(self.root / 'missing')}))
+        (self.app / 'paths.json').write_text(json.dumps(self.mapping(self.root / 'missing')))
         result = self.launch()
         self.assertEqual(result.returncode, 2)
         self.assertNotIn(str(self.root), result.stdout + result.stderr)
+        self.assertFalse((self.app / 'App').exists())
+
+    def test_redirected_codex_install_is_reused_with_identical_workspace_and_state(self):
+        redirected = self.local / 'Packages' / 'OpenAI.Codex_synthetic' / 'LocalCache' / 'Local' / 'FormFiller'
+        installed = redirected / 'App' / 'snapshot'
+        installed.mkdir(parents=True)
+        (installed / 'Run-FormFillerPrivate.ps1').write_text(STUB_UI)
+        mapping = self.mapping(installed)
+        (redirected / 'paths.json').write_text(json.dumps(mapping))
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('first use', result.stdout)
+        self.assertEqual(json.loads((self.app / 'paths.json').read_text()), mapping)
+        self.assertEqual(json.loads((installed / 'resolved.json').read_text(encoding='utf-8-sig')), mapping)
+        self.assertFalse((self.app / 'App').exists())
+
+    def test_invalid_native_locator_never_falls_back_or_reinstalls(self):
+        (self.app / 'paths.json').write_text('{bad JSON')
+        result = self.launch()
+        self.assertEqual(result.returncode, 2)
         self.assertFalse((self.app / 'App').exists())
 
 

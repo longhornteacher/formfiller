@@ -21,6 +21,8 @@ The hook audits actual staged contents, including forced additions, and emits on
 
 Double-click `LaunchWebUI.bat` in the repository root to start the WebUI and open it in your default browser. It uses the existing installed app when configured. On first use it installs the app runtime, then asks you to choose a private workspace. Python 3.11+ and PowerShell 7 are required. Keep the launcher window open while using the UI. `outputs/OpenForms.bat` also forwards to this launcher.
 
+If Codex's packaged Windows app created the original installation in its redirected app-data folder, the desktop launcher discovers that existing locator and preserves the same private workspace and local submission state. It does not create a second runtime or reset approvals. A new installation shows progress while creating Python and installing dependencies.
+
 Forms is the default view: select a form, edit its saved answers, add a form, or remove one. Changed answers require an explicit review before a run. Today, History, Sync, and Readiness are secondary navigation views. Sync checks local source validity; the selected folder's sync provider handles file transfer. FormFiller does not refresh calendar approval dates during a sync check.
 
 New installations ask the user to choose a private folder. This teacher/development installation has already migrated its existing inputs to the chosen folder. Configuration, observed schemas, reports, and source documents stay there; browser authentication and submission state stay in a separate local runtime. Migration preserved existing form IDs, approval records, and submission history. The existing run/check and scheduled wrappers forward to the verified installed snapshot through the local locator.

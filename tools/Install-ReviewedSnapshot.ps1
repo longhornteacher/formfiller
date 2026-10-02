@@ -93,9 +93,11 @@ if ($PythonPath) {
         $pythonPrefix = @()
     }
 }
+Write-Output 'Creating the Python runtime. This can take a minute...'
 & $pythonExe @pythonPrefix -m venv (Join-Path $destinationFull '.venv')
 if ($LASTEXITCODE -ne 0) { throw 'Could not create the installed virtual environment.' }
 if ($InstallDependencies) {
+    Write-Output 'Installing application dependencies...'
     & (Join-Path $destinationFull '.venv\Scripts\python.exe') -m pip install -r (Join-Path $destinationFull 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Could not install runtime dependencies into the installed snapshot.' }
 }
