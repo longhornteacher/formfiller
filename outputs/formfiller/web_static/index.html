@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>FormFiller</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#forms" aria-label="FormFiller home">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>FormFiller</span>
+      </a>
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="forms"><span class="nav-icon" aria-hidden="true">▤</span>Forms</button>
+        <button class="nav-item" data-view="today"><span class="nav-icon" aria-hidden="true">◷</span>Today</button>
+        <button class="nav-item" data-view="history"><span class="nav-icon" aria-hidden="true">↺</span>History</button>
+        <button class="nav-item" data-view="sync"><span class="nav-icon" aria-hidden="true">⇄</span>Sync</button>
+        <button class="nav-item" data-view="readiness"><span class="nav-icon" aria-hidden="true">✓</span>Readiness</button>
+      </nav>
+      <div class="sidebar-foot"><span class="local-dot"></span><span>Local workspace</span></div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>Workspace</span><span class="crumb-sep">/</span><strong id="crumb-current">Forms</strong></div>
+        <div class="topbar-right"><span class="local-badge" id="mode-badge"><span class="local-dot"></span>Private local workspace</span><button class="icon-button" id="refresh-button" aria-label="Refresh current view" title="Refresh">↻</button></div>
+      </header>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <section id="view-root" class="view-root" tabindex="-1"></section>
+    </main>
+  </div>
+  <dialog id="form-dialog" class="modal">
+    <form id="form-setup" method="dialog" novalidate>
+      <div class="modal-head"><div><p class="eyebrow">FORM SETUP</p><h2 id="dialog-title">Add a form</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Close">×</button></div>
+      <div class="setup-steps" aria-label="Setup steps"><span class="step current" data-step="1"><i>1</i>Details</span><span class="step-line"></span><span class="step" data-step="2"><i>2</i>Answers</span></div>
+      <div id="details-step" class="dialog-step">
+        <label class="field-label" for="form-name">Form name</label><input id="form-name" name="name" autocomplete="off" required maxlength="120" placeholder="For example, Daily check-in">
+        <label class="field-label" for="form-url">Form URL</label><input id="form-url" name="url" type="url" autocomplete="url" required placeholder="https://…">
+        <p class="helper-text">The form is inspected locally to identify its questions. Answers are saved for review before use.</p>
+        <div class="dialog-actions"><button type="button" class="button secondary" data-close-dialog>Cancel</button><button type="button" class="button primary" id="inspect-button">Inspect form <span aria-hidden="true">→</span></button></div>
+      </div>
+      <div id="answers-step" class="dialog-step" hidden>
+        <div class="inspection-summary" id="inspection-summary"></div>
+        <div id="answer-fields" class="answer-fields"></div>
+        <div class="dialog-actions"><button type="button" class="button secondary" id="back-button">Back</button><button type="button" class="button primary" id="save-form-button">Save form</button></div>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" class="modal small-modal">
+    <form method="dialog"><div class="modal-head"><div><p class="eyebrow">REMOVE FORM</p><h2>Remove this form?</h2></div><button type="button" class="icon-button" data-close-confirm aria-label="Close">×</button></div><p class="modal-copy">This form will no longer be filled. Its submission history is kept.</p><div class="dialog-actions"><button type="button" class="button secondary" data-close-confirm>Cancel</button><button type="button" class="button danger" id="confirm-remove">Remove form</button></div></form>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+if [ -x outputs/.venv/Scripts/python.exe ]; then
+    exec outputs/.venv/Scripts/python.exe -m tools.audit_privacy --staged
+elif [ -x outputs/.venv/bin/python ]; then
+    exec outputs/.venv/bin/python -m tools.audit_privacy --staged
+elif command -v python3 >/dev/null 2>&1; then
+    exec python3 -m tools.audit_privacy --staged
+else
+    exec python -m tools.audit_privacy --staged
+fi

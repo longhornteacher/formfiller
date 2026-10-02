@@ -1,0 +1,47 @@
+# Private user inputs. District calendar references in calendar/ are public.
+Accommodation Log.txt
+**/forms.json
+**/settings.json
+**/paths.json
+**/.formfiller-owner.json
+**/browser-profile/
+**/state/
+**/config/
+**/reports/
+**/logs/
+**/observed/
+.env
+.env.*
+*.pem
+*.key
+outputs/**
+!outputs/formfiller/
+outputs/formfiller/**
+!outputs/formfiller/*.py
+!outputs/formfiller/web_static/
+outputs/formfiller/web_static/**
+!outputs/formfiller/web_static/**/*.html
+!outputs/formfiller/web_static/**/*.js
+!outputs/formfiller/web_static/**/*.css
+!outputs/formfiller/web_static/**/*.svg
+!outputs/formfiller/web_static/**/*.png
+!outputs/formfiller/web_static/**/*.jpg
+!outputs/formfiller/web_static/**/*.jpeg
+!outputs/formfiller/web_static/**/*.webp
+!outputs/formfiller/web_static/**/*.ico
+!outputs/formfiller/web_static/**/*.woff
+!outputs/formfiller/web_static/**/*.woff2
+!outputs/requirements.txt
+!outputs/README.md
+!outputs/*.bat
+!outputs/formfiller/web_static/ui_smoke.py
+!tests/
+!tests/**/*.py
+
+# Generated bundles and Python runtime files.
+tools/artifacts/
+**/__pycache__/
+*.py[cod]
+**/.venv/
+**/venv/
+.pytest_cache/
