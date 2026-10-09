@@ -33,6 +33,7 @@ $sourceNames = @(
     'ownership.py',
     'run_and_check.py',
     'runner.py',
+    'skyward.py',
     'state.py',
     'store.py',
     'workspace.py',

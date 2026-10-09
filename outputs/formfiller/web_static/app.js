@@ -5,8 +5,8 @@
   const dialog = document.querySelector('#form-dialog');
   const confirmDialog = document.querySelector('#confirm-dialog');
   const setupForm = document.querySelector('#form-setup');
-  const state = { csrf: '', view: 'forms', forms: [], selectedId: null, removeId: null, inspection: null, session: {} };
-  const viewNames = { forms: 'Forms', today: 'Today', history: 'History', sync: 'Sync', readiness: 'Readiness' };
+  const state = { course: '', csrf: '', view: 'forms', forms: [], selectedId: null, removeId: null, inspection: null, session: {} };
+  const viewNames = { forms: 'Forms', today: 'Today', attendance: 'Attendance', history: 'History', sync: 'Sync', readiness: 'Readiness' };
   const safeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const dateLabel = value => value ? safeText(value) : '—';
   const showNotice = (message, kind = 'info') => {
@@ -47,6 +47,7 @@
     if (state.view === 'forms') return loadForms();
     const data = await request(`/api/${state.view}`);
     if (state.view === 'today') renderToday(data);
+    else if (state.view === 'attendance') renderAttendance(data);
     else if (state.view === 'history') renderHistory(data);
     else if (state.view === 'readiness') renderReadiness(data);
     else if (state.view === 'sync') renderSync(data);
@@ -251,6 +252,35 @@
       clearNotice(); buttonBusy(button, true, 'Starting…');
       try { await request('/api/run', {method:'POST', body:{}}); showNotice('Run finished. Refreshing today’s status.','success'); const updated=await request('/api/today'); renderToday(updated); }
       catch (error) { showNotice(error.message, 'error'); button.disabled=false; button.textContent="Run today's forms"; }
+    });
+  };
+  const markLabels = { present: 'Here', absent: 'Absent', tardy: 'Tardy' };
+  const renderAttendance = data => {
+    const students = Array.isArray(data.students) ? data.students : [];
+    const counts = data.counts || {};
+    const locked = Boolean(data.submitted);
+    const courses = Array.isArray(data.courses) ? data.courses : [];
+    const chosen = state.course && courses.some(course => course.id === state.course) ? state.course : (data.course || courses[0]?.id || '');
+    const picker = courses.length ? `<label class="course-picker" for="course-select">Class</label><select id="course-select" class="answer-select" ${locked ? 'disabled' : ''}>${courses.map(course => `<option value="${safeText(course.id)}" ${course.id === chosen ? 'selected' : ''}>${safeText(course.name)}${course.period ? ` (${safeText(course.period)})` : ''}</option>`).join('')}</select>` : '';
+    const rows = students.map(student => `<div class="student-row ${safeText(student.mark)}"><div class="student-name"><strong>${safeText(student.name)}</strong>${student.suggested === 'absent' ? '<span class="tag warn j-tag">J rule</span>' : ''}${Object.keys(student.details || {}).length ? `<small>${Object.entries(student.details).map(([key, value]) => `${safeText(key)} ${safeText(value)}`).join(' · ')}</small>` : ''}</div><div class="mark-group" role="group" aria-label="Attendance for ${safeText(student.name)}">${Object.entries(markLabels).map(([mark, label]) => `<button type="button" class="mark-button ${mark} ${student.mark === mark ? 'on' : ''}" data-student="${safeText(student.id)}" data-mark="${mark}" aria-pressed="${student.mark === mark}" ${locked ? 'disabled' : ''}>${label}</button>`).join('')}</div></div>`).join('');
+    root.innerHTML = `<div class="page-heading"><div><h1>Attendance</h1><p>Read the Skyward roster, mark who is away, then send it to Skyward for ${dateLabel(data.date)}.</p><p class="today-mode">${safeText(modeLabel(data.mode || state.session.mode))}</p></div><div class="heading-actions">${picker}<button id="load-roster" class="button primary" ${locked || !courses.length ? 'disabled' : ''}>${students.length ? 'Reload roster' : 'Load roster'}</button></div></div>${courses.length ? '' : '<div class="notice-box">No Skyward classes are configured yet. Add a skyward.json file to your private workspace.</div>'}${students.length ? `<div class="today-meta"><span><b>Students</b> ${students.length}</span><span><b>Here</b> ${counts.present ?? 0}</span><span><b>Absent</b> ${counts.absent ?? 0}</span><span><b>Tardy</b> ${counts.tardy ?? 0}</span></div><div class="roster-panel">${rows}</div><div class="editor-actions"><span class="editor-save-status" id="attendance-status" aria-live="polite">${locked ? 'Attendance sent for today' : ''}</span><button id="submit-attendance" class="button primary" ${locked ? 'disabled' : ''}>Send attendance</button></div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">🍎</div><h2>No roster loaded</h2><p>Pick a class and load its roster from Skyward. A J in a neighboring period pre-marks a student absent. Names stay on this computer.</p></div>`}`;
+    root.querySelector('#course-select')?.addEventListener('change', event => { state.course = event.target.value; });
+    root.querySelector('#load-roster')?.addEventListener('click', async event => {
+      const button = event.currentTarget; clearNotice(); buttonBusy(button, true, 'Reading Skyward…');
+      try { state.course = root.querySelector('#course-select')?.value || ''; renderAttendance(await request('/api/attendance/load', {method:'POST', body:{course: state.course}})); showNotice('Roster loaded.', 'success'); }
+      catch (error) { showNotice(error.message, 'error'); button.disabled = false; button.textContent = students.length ? 'Reload roster' : 'Load roster'; }
+    });
+    root.querySelectorAll('.mark-button').forEach(button => button.addEventListener('click', async () => {
+      const marks = {};
+      students.forEach(student => { marks[student.id] = student.mark; });
+      marks[button.dataset.student] = button.dataset.mark;
+      try { renderAttendance(await request('/api/attendance/marks', {method:'POST', body:{marks}})); }
+      catch (error) { showNotice(error.message, 'error'); }
+    }));
+    root.querySelector('#submit-attendance')?.addEventListener('click', async event => {
+      const button = event.currentTarget; clearNotice(); buttonBusy(button, true, 'Sending…');
+      try { renderAttendance(await request('/api/attendance/submit', {method:'POST', body:{}})); showNotice('Attendance sent.', 'success'); }
+      catch (error) { showNotice(error.message, 'error'); button.disabled = false; button.textContent = 'Send attendance'; }
     });
   };
   const renderHistory = data => {

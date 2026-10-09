@@ -36,6 +36,7 @@ $expectedFiles = @(
     'formfiller\state.py',
     'formfiller\store.py',
     'formfiller\workspace.py',
+    'formfiller\skyward.py',
     'formfiller\web.py',
     'requirements.txt'
 )

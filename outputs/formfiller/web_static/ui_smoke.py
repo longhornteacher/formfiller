@@ -122,6 +122,16 @@ def main() -> None:
                 page.locator(".form-list-row").filter(has_text="Smoke edited form").wait_for(state="detached")
                 assert page.locator(".form-list-row").count() == 4
 
+                page.get_by_role("button", name="Attendance").click()
+                page.get_by_role("button", name="Load roster").click()
+                page.locator(".student-row").first.wait_for()
+                assert page.locator(".student-row.absent").count() == 2  # pre-marked by the J rule
+                page.locator(".mark-button.absent").nth(1).click()
+                page.locator(".student-row.absent").nth(2).wait_for()
+                page.get_by_role("button", name="Send attendance").click()
+                page.get_by_text("Attendance sent.").wait_for()
+                assert page.get_by_role("button", name="Send attendance").is_disabled()
+
                 assert not errors, "frontend raised a browser error"
             finally:
                 browser.close()

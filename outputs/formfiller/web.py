@@ -22,6 +22,8 @@ from zoneinfo import ZoneInfo
 from .browser import BrowserError, BrowserSession, answer_plan
 from .calendar import CalendarError, load_calendar
 from .runner import _config_fingerprint, _schema_fingerprint
+from .skyward import (MARKS, SkywardSession, demo_courses, demo_roster, load_config, staged_counts,
+                      suggest_mark)
 from .state import StateError, StateStore
 
 SAFE_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
@@ -175,6 +177,9 @@ class WebApp:
         self.operation = threading.Lock()
         self.inspections = {}
         self.needs_setup = needs_setup
+        # Student names stay in memory only; nothing here is persisted.
+        self.roster, self.marks, self.attendance_date, self.attendance_submitted = [], {}, None, False
+        self.course_id = None
 
     @contextmanager
     def editing(self):
@@ -365,6 +370,90 @@ class WebApp:
                 approved=True, config_fingerprint=fingerprint)
         return self.form(form_id)
 
+    def _attendance_current(self):
+        if self.attendance_date != today():
+            self.roster, self.marks, self.attendance_submitted, self.course_id = [], {}, False, None
+            self.attendance_date = today()
+
+    def skyward_config(self):
+        if self.mode == "demo":
+            return {"login_url": "", "host": "", "courses": demo_courses()}
+        try:
+            return load_config(read_json(self.config_dir / "skyward.json", "skyward_not_configured"))
+        except BrowserError as exc:
+            raise WebError(str(exc.code).lower()) from None
+
+    def attendance(self):
+        empty = {"date": today().isoformat(), "mode": self.mode, "loaded": False, "students": [], "courses": [],
+                 "course": None, "counts": {mark: 0 for mark in MARKS}, "submitted": False}
+        if self.needs_setup:
+            return {**empty, "needs_setup": True}
+        self._attendance_current()
+        try:
+            courses = [{"id": c["id"], "name": c["name"], "period": c["period"]} for c in self.skyward_config()["courses"]]
+        except WebError:
+            courses = []
+        students = [{"id": s["id"], "name": s["name"], "details": s["details"], "suggested": s["suggested"],
+                     "mark": self.marks.get(s["id"], "present")} for s in self.roster]
+        return {**empty, "loaded": bool(self.roster), "students": students, "courses": courses,
+                "course": self.course_id, "counts": staged_counts(self.roster, self.marks),
+                "submitted": self.attendance_submitted}
+
+    def load_roster(self, payload):
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        course_id = payload.get("course")
+        if not isinstance(course_id, str):
+            raise WebError("course_required")
+        with self.editing():
+            self._attendance_current()
+            if self.attendance_submitted:
+                raise WebError("attendance_already_submitted", 409)
+            config = self.skyward_config()
+            if course_id not in {c["id"] for c in config["courses"]}:
+                raise WebError("skyward_course_unknown")
+            if self.mode == "demo":
+                roster = demo_roster(today())
+            else:
+                self.calendar()  # Non-instructional or stale dates stop before Edge opens.
+                settings = self.settings()
+                settings["browser_profile_path"] = str(self.profile_dir.resolve())
+                with SkywardSession(settings) as browser:
+                    roster = browser.read_roster(config, course_id)
+            self.roster = [{"id": f"s{index}", **student, "suggested": suggest_mark(student["details"], today())}
+                           for index, student in enumerate(roster)]
+            # The J rule pre-marks absences; the teacher reviews and can change any mark.
+            self.marks = {s["id"]: "absent" for s in self.roster if s["suggested"] == "absent"}
+            self.course_id = course_id
+        return self.attendance()
+
+    def set_marks(self, payload):
+        marks = payload.get("marks")
+        if not isinstance(marks, dict):
+            raise WebError("marks_invalid")
+        with self.editing():
+            self._attendance_current()
+            if self.attendance_submitted:
+                raise WebError("attendance_already_submitted", 409)
+            known = {student["id"] for student in self.roster}
+            if not set(marks) <= known or not all(value in MARKS for value in marks.values()):
+                raise WebError("marks_invalid")
+            self.marks = {key: value for key, value in marks.items() if value != "present"}
+        return self.attendance()
+
+    def submit_attendance(self):
+        with self.editing():
+            self._attendance_current()
+            if not self.roster:
+                raise WebError("roster_required", 409)
+            if self.attendance_submitted:
+                raise WebError("attendance_already_submitted", 409)
+            if self.mode != "demo":
+                # Entering marks in Skyward needs a reviewed adapter for the live page.
+                raise WebError("skyward_submit_not_configured", 409)
+            self.attendance_submitted = True
+        return self.attendance()
+
     def run_once(self):
         if self.needs_setup:
             raise WebError("workspace_required", 409)
@@ -502,7 +591,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET":
             routes = {"/api/session": lambda: {"csrf_token": app.token, "mode": app.mode, "needs_setup": app.needs_setup},
                       "/api/forms": lambda: {"forms": app.forms()}, "/api/today": app.status,
-                      "/api/history": app.history, "/api/readiness": app.readiness, "/api/sync": app.sync}
+                      "/api/history": app.history, "/api/attendance": app.attendance, "/api/readiness": app.readiness, "/api/sync": app.sync}
             if path in routes:
                 return self.respond(200, routes[path]())
             if path.startswith("/api/forms/"):
@@ -538,6 +627,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, app.choose_workspace())
         if self.command == "POST" and path == "/api/forms":
             return self.respond(201, app.mutate_form(payload))
+        if self.command == "POST" and path == "/api/attendance/load":
+            return self.respond(200, app.load_roster(payload))
+        if self.command == "POST" and path == "/api/attendance/marks":
+            return self.respond(200, app.set_marks(payload))
+        if self.command == "POST" and path == "/api/attendance/submit":
+            return self.respond(200, app.submit_attendance())
         if self.command == "POST" and path == "/api/sync/check":
             return self.respond(200, app.sync())
         if self.command == "POST" and path == "/api/run":

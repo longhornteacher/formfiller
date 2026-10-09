@@ -7,3 +7,14 @@ Do not check private configuration, approved answers, browser profiles, persiste
 Build a clean source bundle from the repository root with `tools/Build-CleanSource.ps1`. Review the generated bundle, then install it outside the repository with `tools/Install-ReviewedSnapshot.ps1`. The installer writes `install-manifest.json`; both installed launchers verify the manifest before startup. `Run-FormFillerPrivate.ps1` asks for a private workspace on first run. `Run-FormFillerOperation.ps1` performs the normal sanitized operation; pass `-CheckOnly` to check without requesting submission. Keep the one authoritative submission runtime and authenticated browser profile on the designated local Windows machine.
 
 The checkout's operating instructions are in the repository-root `AGENTS.md`. Do not use this folder's editable source as the scheduled production runtime after the installed snapshot workflow is configured.
+
+## Skyward attendance (in progress)
+
+The Attendance view reads a class roster from Skyward and pre-marks students absent when today's column shows a `J` in a neighboring period (`J -` or `- J`); the teacher reviews every mark. Live sign-in stays manual in the dedicated Edge profile. Private mode reads `config/skyward.json` from the private workspace, never Git:
+
+```json
+{"login_url": "https://<district skyward host>/.../login/Azure",
+ "courses": [{"id": "<section id from the submitSelected link>", "name": "Class name", "period": "1st"}]}
+```
+
+Live reading and posting are unverified against the real page and posting is disabled (`skyward_submit_not_configured`) until a real attendance-day page has been captured. The demo uses fictional students and never touches Skyward.
