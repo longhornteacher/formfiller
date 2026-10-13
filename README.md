@@ -29,6 +29,8 @@ New installations ask the user to choose a private folder. This teacher/developm
 
 Open `outputs/DemoForms.bat` for an isolated synthetic preview. Development validation uses `outputs/.venv/Scripts/python.exe -m unittest discover -s tests` and `outputs/.venv/Scripts/python.exe outputs/formfiller/web_static/ui_smoke.py`. No production responses are submitted by these tests.
 
+Teacher installation and first-use instructions are in [docs/teacher-installation-guide.md](docs/teacher-installation-guide.md). The development scope and acceptance checks are in [docs/webui-onboarding-brief.md](docs/webui-onboarding-brief.md).
+
 ## Development isolation
 
 From the repository root, build the clean source bundle and its Windows Sandbox definition:

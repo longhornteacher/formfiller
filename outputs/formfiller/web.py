@@ -175,6 +175,7 @@ class WebApp:
         self.token = secrets.token_urlsafe(32)
         self.store = FormStore(self.config_dir)
         self.operation = threading.Lock()
+        self.signin_process = None
         self.inspections = {}
         self.needs_setup = needs_setup
         # Student names stay in memory only; nothing here is persisted.
@@ -205,6 +206,22 @@ class WebApp:
             return load_calendar(path, today(), max_age_days=settings.get("max_calendar_age_days", 14))
         except CalendarError as exc:
             raise WebError(exc.code) from None
+
+    def calendar_summary(self):
+        """Summarize a validated calendar without returning its provenance or paths."""
+        try:
+            settings = self.settings()
+            configured = Path(settings.get("calendar_path", "calendar.json"))
+            path = configured if configured.is_absolute() else self.config_dir / configured
+            document = read_json(path, "calendar_unavailable")
+            from .calendar import _validate_document
+            start, end, school_days, _non_school_days, _complete, _exported_at = _validate_document(document)
+            # Validate freshness and any approved workbook provenance before reporting coverage.
+            load_calendar(path, start, max_age_days=settings.get("max_calendar_age_days", 14))
+            return {"coverage_start": start.isoformat(), "coverage_end": end.isoformat(),
+                    "school_day_count": len(school_days)}
+        except (WebError, CalendarError, TypeError, ValueError, OSError):
+            return None
 
     def forms(self):
         if self.needs_setup:
@@ -293,7 +310,7 @@ class WebApp:
                 code = getattr(exc, "code", "runtime_owner_invalid")
                 items.append({"label": "Runner device", "status": "blocked", "code": code})
         return {"items": items, "ready": not any(item["status"] in ("blocked", "skipped") for item in items),
-                "mode": self.mode}
+                "mode": self.mode, "calendar_summary": self.calendar_summary()}
 
     def sync(self):
         checks = self.readiness()["items"]
@@ -381,7 +398,49 @@ class WebApp:
         try:
             return load_config(read_json(self.config_dir / "skyward.json", "skyward_not_configured"))
         except BrowserError as exc:
-            raise WebError(str(exc.code).lower()) from None
+            code = "skyward_url_invalid" if exc.code == "SKYWARD_URL_INVALID" else "skyward_config_invalid"
+            raise WebError(code) from None
+
+    def skyward_settings(self):
+        """Return the editor model without exposing paths or private file errors."""
+        if self.mode == "demo":
+            return {"mode": "demo", "editable": False, "configured": True,
+                    "config": self.skyward_config()}
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        path = self.config_dir / "skyward.json"
+        if not path.exists():
+            return {"mode": "private", "editable": True, "configured": False,
+                    "config": {"login_url": "", "host": "", "courses": []}}
+        return {"mode": "private", "editable": True, "configured": True,
+                "config": self.skyward_config()}
+
+    def replace_skyward_config(self, payload):
+        """Replace the complete, validated course list in the selected private workspace."""
+        if self.mode != "private":
+            raise WebError("demo_config_read_only", 409)
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        if not isinstance(payload, dict) or set(payload) != {"login_url", "courses"}:
+            raise WebError("skyward_config_invalid")
+        courses = payload.get("courses")
+        if not isinstance(courses, list) or any(not isinstance(course, dict)
+                or not set(course) <= {"id", "name", "period"} for course in courses):
+            raise WebError("skyward_config_invalid")
+        try:
+            validated = load_config(payload)
+        except BrowserError as exc:
+            code = "skyward_url_invalid" if exc.code == "SKYWARD_URL_INVALID" else "skyward_config_invalid"
+            raise WebError(code) from None
+        # Store only the canonical configuration, never any supplied path or extra field.
+        from .state import _atomic_json
+        with self.editing():
+            try:
+                _atomic_json(self.config_dir / "skyward.json", {
+                    "login_url": validated["login_url"], "courses": validated["courses"]})
+            except Exception:
+                raise WebError("skyward_config_save_failed", 500) from None
+        return self.skyward_settings()
 
     def attendance(self):
         empty = {"date": today().isoformat(), "mode": self.mode, "loaded": False, "students": [], "courses": [],
@@ -442,15 +501,14 @@ class WebApp:
         return self.attendance()
 
     def submit_attendance(self):
+        if self.mode != "demo":
+            raise WebError("attendance_posting_unavailable", 409)
         with self.editing():
             self._attendance_current()
             if not self.roster:
                 raise WebError("roster_required", 409)
             if self.attendance_submitted:
                 raise WebError("attendance_already_submitted", 409)
-            if self.mode != "demo":
-                # Entering marks in Skyward needs a reviewed adapter for the live page.
-                raise WebError("skyward_submit_not_configured", 409)
             self.attendance_submitted = True
         return self.attendance()
 
@@ -490,6 +548,46 @@ class WebApp:
             return {"exit_code": result.returncode, "mode": "private", **self.status()}
         finally:
             self.operation.release()
+
+    def start_sign_in(self, payload):
+        """Open the installed runner's manual sign-in flow for a saved form.
+
+        Launching the browser is only a user action; readiness stays unverified
+        until the runner later checks access while opening the form.
+        """
+        if self.mode != "private" or self.needs_setup:
+            raise WebError("sign_in_unavailable", 409)
+        if not isinstance(payload, dict) or set(payload) != {"form_id"} or not isinstance(payload["form_id"], str):
+            raise WebError("request_invalid")
+        if not self.installed_root:
+            raise WebError("installed_snapshot_required", 403)
+        if os.name != "nt" or not hasattr(subprocess, "CREATE_NEW_CONSOLE"):
+            raise WebError("sign_in_unavailable", 409)
+        with self.editing():
+            verify_installation(self.installed_root)
+            try:
+                form = self.store.get_form(payload["form_id"])
+            except Exception:
+                raise WebError("form_not_configured", 409) from None
+            if not isinstance(form.get("url"), str) or not form.get("url"):
+                raise WebError("form_not_configured", 409)
+            if self.signin_process is not None and self.signin_process.poll() is None:
+                return {"started": True, "already_open": True, "verified": False}
+            environment = os.environ.copy()
+            environment["FORM_FILLER_WORKSPACE"] = str(self.config_dir.parent.resolve())
+            environment["FORM_FILLER_RUNTIME"] = str(self.state_dir.parent.resolve())
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            try:
+                self.signin_process = subprocess.Popen(
+                    [sys.executable, "-m", "formfiller.runner", "--login", form["alias"]],
+                    cwd=self.installed_root, env=environment,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    close_fds=True,
+                )
+            except Exception:
+                self.signin_process = None
+                raise WebError("sign_in_unavailable", 409) from None
+        return {"started": True, "already_open": False, "verified": False}
 
     def choose_workspace(self):
         """A human picks a folder in the installed app; API never accepts paths."""
@@ -591,7 +689,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET":
             routes = {"/api/session": lambda: {"csrf_token": app.token, "mode": app.mode, "needs_setup": app.needs_setup},
                       "/api/forms": lambda: {"forms": app.forms()}, "/api/today": app.status,
-                      "/api/history": app.history, "/api/attendance": app.attendance, "/api/readiness": app.readiness, "/api/sync": app.sync}
+                      "/api/history": app.history, "/api/attendance": app.attendance, "/api/readiness": app.readiness,
+                      "/api/sync": app.sync, "/api/skyward/config": app.skyward_settings}
             if path in routes:
                 return self.respond(200, routes[path]())
             if path.startswith("/api/forms/"):
@@ -633,6 +732,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, app.set_marks(payload))
         if self.command == "POST" and path == "/api/attendance/submit":
             return self.respond(200, app.submit_attendance())
+        if self.command == "POST" and path == "/api/sign-in":
+            return self.respond(200, app.start_sign_in(payload))
+        if self.command == "PUT" and path == "/api/skyward/config":
+            return self.respond(200, app.replace_skyward_config(payload))
         if self.command == "POST" and path == "/api/sync/check":
             return self.respond(200, app.sync())
         if self.command == "POST" and path == "/api/run":
@@ -659,10 +762,8 @@ class Handler(BaseHTTPRequestHandler):
             code = str(exc.code).lower()
             code = code if SAFE_CODE.fullmatch(code) else "request_failed"
             self.respond(409, {"error": {"code": code, "message": code.replace("_", " ")}})
-        except Exception as exc:
-            code = getattr(exc, "code", "request_failed")
-            code = code if isinstance(code, str) and SAFE_CODE.fullmatch(code) else "request_failed"
-            self.respond(400, {"error": {"code": code, "message": code.replace("_", " ")}})
+        except Exception:
+            self.respond(400, {"error": {"code": "request_failed", "message": "request failed"}})
 
     do_GET = do_POST = do_PUT = do_DELETE = handle_safely
 

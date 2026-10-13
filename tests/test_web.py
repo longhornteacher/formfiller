@@ -122,6 +122,123 @@ class WebTests(unittest.TestCase):
         self.assertFalse(data['applied'])
         self.assertEqual(before, (self.root / 'config' / 'calendar.json').read_bytes())
 
+    def test_skyward_demo_config_is_synthetic_and_read_only(self):
+        code, data, _ = self.request('GET', '/api/skyward/config')
+        self.assertEqual(code, 200)
+        self.assertEqual(data['mode'], 'demo')
+        self.assertFalse(data['editable'])
+        self.assertEqual(data['config']['courses'], web.demo_courses())
+        self.assertFalse((self.root / 'config' / 'skyward.json').exists())
+        self.assertEqual(self.request('PUT', '/api/skyward/config', {
+            'login_url': 'https://example.invalid/login', 'courses': web.demo_courses()
+        })[0], 409)
+
+    def test_private_skyward_config_replacement_validates_and_persists_canonical_values(self):
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile', mode='private')
+        server = web.Server(('127.0.0.1', 0), app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port)
+            connection.request('GET', '/api/skyward/config', headers={
+                'Host': f'127.0.0.1:{server.server_port}', 'X-FormFiller-Token': app.token})
+            response = connection.getresponse()
+            empty = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertFalse(empty['configured'])
+            connection.close()
+
+            config = {'login_url': 'https://skyward.example.invalid/login',
+                      'courses': [{'id': '12345', 'name': ' Example Class ', 'period': ' 2nd '}]}
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port)
+            connection.request('PUT', '/api/skyward/config', body=json.dumps(config), headers={
+                'Host': f'127.0.0.1:{server.server_port}', 'Content-Type': 'application/json',
+                'X-FormFiller-Token': app.token})
+            response = connection.getresponse()
+            result = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertTrue(result['configured'])
+            self.assertEqual(result['config']['host'], 'skyward.example.invalid')
+            self.assertEqual(result['config']['courses'], [{'id': '12345', 'name': 'Example Class', 'period': '2nd'}])
+            connection.close()
+            saved = json.loads((self.root / 'private-config' / 'skyward.json').read_text())
+            self.assertEqual(saved, {'login_url': config['login_url'], 'courses': result['config']['courses']})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_private_skyward_config_rejects_invalid_config_and_paths(self):
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile', mode='private')
+        server = web.Server(('127.0.0.1', 0), app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            def put(payload):
+                connection = http.client.HTTPConnection('127.0.0.1', server.server_port)
+                connection.request('PUT', '/api/skyward/config', body=json.dumps(payload), headers={
+                    'Host': f'127.0.0.1:{server.server_port}', 'Content-Type': 'application/json',
+                    'X-FormFiller-Token': app.token})
+                response = connection.getresponse()
+                result = response.status, json.loads(response.read())
+                connection.close()
+                return result
+
+            base = {'login_url': 'https://skyward.example.invalid/login',
+                    'courses': [{'id': '12345', 'name': 'Example Class', 'period': ''}]}
+            code, invalid = put({**base, 'runtime_path': 'C:/private'})
+            self.assertEqual(code, 400)
+            self.assertEqual(invalid['error']['code'], 'skyward_config_invalid')
+            code, invalid = put({**base, 'courses': [{'id': 'bad', 'name': 'Example Class'}]})
+            self.assertEqual(code, 400)
+            self.assertEqual(invalid['error']['code'], 'skyward_config_invalid')
+            self.assertFalse((self.root / 'private-config' / 'skyward.json').exists())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_private_attendance_posting_is_blocked_even_with_staged_roster(self):
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile', mode='private')
+        app.roster = [{'id': 's0', 'name': 'Synthetic Student', 'details': {}, 'suggested': 'present'}]
+        app.attendance_date = web.today()
+        with self.assertRaisesRegex(web.WebError, '^attendance_posting_unavailable$'):
+            app.submit_attendance()
+        self.assertFalse(app.attendance_submitted)
+
+    def test_sign_in_launches_only_the_verified_installed_runner_and_stays_unverified(self):
+        install = self.root / 'installed'
+        install.mkdir()
+        app = web.WebApp(self.root / 'config', self.root / 'state', self.root / 'profile',
+                         mode='private', installed_root=install)
+        process = type('Process', (), {'poll': lambda self: None})()
+        with patch.object(web, 'verify_installation') as verify, \
+             patch.object(web.subprocess, 'Popen', return_value=process) as popen:
+            result = app.start_sign_in({'form_id': 'F01'})
+        self.assertEqual(result, {'started': True, 'already_open': False, 'verified': False})
+        verify.assert_called_once_with(install)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[-2:], ['--login', 'F01'])
+        self.assertEqual(popen.call_args.kwargs['cwd'], install)
+        self.assertEqual(popen.call_args.kwargs['env']['FORM_FILLER_WORKSPACE'], str((self.root / 'config').resolve().parent))
+
+    def test_sign_in_never_opens_in_demo_or_without_a_saved_form(self):
+        with self.assertRaisesRegex(web.WebError, '^sign_in_unavailable$'):
+            self.app.start_sign_in({'form_id': 'F01'})
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile',
+                         mode='private', installed_root=self.root / 'installed')
+        with patch.object(web, 'verify_installation'):
+            with self.assertRaisesRegex(web.WebError, '^form_not_configured$'):
+                app.start_sign_in({'form_id': 'missing'})
+
+    def test_readiness_calendar_summary_is_sanitized(self):
+        summary = self.app.readiness()['calendar_summary']
+        self.assertEqual(summary['coverage_start'], web.today().isoformat())
+        self.assertEqual(summary['coverage_end'], web.today().isoformat())
+        self.assertEqual(summary['school_day_count'], 1)
+        self.assertNotIn('source', summary)
+        self.assertNotIn('path', summary)
+
     def setup_picker(self):
         install = self.root / 'installed'
         install.mkdir()
