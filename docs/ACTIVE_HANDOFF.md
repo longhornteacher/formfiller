@@ -1,6 +1,8 @@
 # Active handoff: WebUI reliability and teacher workflow
 
-Status: **Ready for implementation in the next session. No slice implemented.**
+Status: **Deferred by user direction. Accept the current stack and wait for issues from real use. No slice implemented.**
+
+Current direction, October 13, 2026: commit and push the existing state to `dev`. Do not execute the planned slices automatically. Keep the review and slices as reference for triaging an actual reported problem; choose the smallest justified fix when new evidence arrives.
 
 Prepared October 13, 2026. Baseline reviewed commit: `ffa40b7` (`Build teacher onboarding web UI`). Confirm current HEAD and working-tree changes before starting; this is a baseline reference, not a reset instruction.
 
@@ -8,7 +10,7 @@ Prepared October 13, 2026. Baseline reviewed commit: `ffa40b7` (`Build teacher o
 
 Make the existing local WebUI trustworthy during failure, navigation, editing, first use, and recovery. Preserve the deterministic runner, immutable form identities, local state, installed-snapshot verification, and Old Schoolhouse theme. Keep Skyward attendance a preview.
 
-The user requested this active handoff and execution slices after the senior review. This session prepares the work; it does not implement it or launch another chat. The kickoff prompt below is the instruction to use when starting implementation in a new session.
+The user requested this handoff and execution slices after the senior review, then chose to defer that work and use the current stack. The specifications below are retained as reference. Resuming the full implementation plan requires a new user instruction.
 
 Scope is local source development with temporary synthetic fixtures and local mock pages. It includes the eight slices below. Calendar import/approval, live enablement UI, live Skyward verification/posting, new attendance rules, scheduling, production installation, and production submissions remain outside this work.
 
@@ -66,20 +68,20 @@ These are minimum semantics. Name small internal helpers to fit the codebase; re
 
 ## Ordered slices and progress
 
-Execute in this order. Each slice assumes prior slices are reviewed and accepted in the working tree.
+If the user explicitly resumes the full plan, execute in this order. For an actual reported break, triage the problem and select the smallest relevant scope instead. Each full-plan slice assumes prior slices are reviewed and accepted in the working tree.
 
 | Slice | Deliverable | Status | Evidence/commit |
 |---|---|---|---|
-| [01](slices/webui/01-navigation.md) | Navigation and async render ownership | Pending | — |
-| [02](slices/webui/02-run-outcomes.md) | Truthful run outcomes and uncertainty handling | Pending | — |
-| [03](slices/webui/03-editing.md) | Draft protection and revision conflicts | Pending | — |
-| [04](slices/webui/04-form-recovery.md) | Existing-form re-inspection and restoration | Pending | — |
-| [05](slices/webui/05-first-use.md) | Manual sign-in before first inspection | Pending | — |
-| [06](slices/webui/06-attendance.md) | Reliable attendance preview mutations | Pending | — |
-| [07](slices/webui/07-accessibility-polish.md) | Accessible errors and coherent UI wording | Pending | — |
-| [08](slices/webui/08-integration.md) | Integrated verification and release handoff | Pending | — |
+| [01](slices/webui/01-navigation.md) | Navigation and async render ownership | Deferred | — |
+| [02](slices/webui/02-run-outcomes.md) | Truthful run outcomes and uncertainty handling | Deferred | — |
+| [03](slices/webui/03-editing.md) | Draft protection and revision conflicts | Deferred | — |
+| [04](slices/webui/04-form-recovery.md) | Existing-form re-inspection and restoration | Deferred | — |
+| [05](slices/webui/05-first-use.md) | Manual sign-in before first inspection | Deferred | — |
+| [06](slices/webui/06-attendance.md) | Reliable attendance preview mutations | Deferred | — |
+| [07](slices/webui/07-accessibility-polish.md) | Accessible errors and coherent UI wording | Deferred | — |
+| [08](slices/webui/08-integration.md) | Integrated verification and release handoff | Deferred | — |
 
-Status vocabulary: Pending, In progress, Needs review, Complete. Record a blocker in the continuation record rather than claiming completion. Commit hashes are optional if no commit has been requested.
+Status vocabulary: Deferred, Pending, In progress, Needs review, Complete. Record a blocker in the continuation record rather than claiming completion. Commit hashes are optional if no commit has been requested.
 
 ## Validation and delivery
 
@@ -105,17 +107,17 @@ Review fixtures manually for real names; pattern auditing cannot establish that.
 
 ## Continuation record — update after every slice
 
-- Current slice: None; start 01.
+- Current slice: None; all slices deferred.
 - Last completed slice: None.
 - Changed application files: None at handoff creation.
 - Agreed concrete API contracts: Minimum semantics above; record implementation details as slices land.
 - Latest validation: Historical 140-test baseline and synthetic smoke pass from the review.
 - Unresolved issues: Installed version not verified; live integration remains out of scope.
-- Next action: Inspect current git status/source, then implement slice 01.
-- Release state: Development planning only; no production installation or submissions.
+- Next action: Wait for a user-reported issue from real use. No monitoring or automation has been requested.
+- Release state: Current source accepted for the `dev` branch; no production installation or submissions.
 
 ## New-session kickoff prompt
 
 Copy this into the new session opened on this repository:
 
-> Read AGENTS.md, docs/ACTIVE_HANDOFF.md, and docs/slices/webui/README.md. Implement the WebUI reliability and teacher-workflow work through slices 01–08 in order. Act as senior coordinator and delegate each bounded coding slice to an implementation agent where available; review its diff and acceptance evidence before advancing. Preserve existing user changes. Use synthetic data and local mocks only; isolated test approvals/settings are allowed. Do not run production forms, change production approvals/settings, enable private attendance posting, install or switch a production snapshot, create a schedule, commit, or push. Update the active handoff ledger and continuation record after each slice. Continue through the defined scope without stopping for routine implementation decisions, and finish with validated source changes and a concise release handoff.
+> Read AGENTS.md and docs/ACTIVE_HANDOFF.md. The current stack is accepted and the planned reliability slices are deferred. Do not implement them automatically. When I report a real-use problem, reproduce it safely with synthetic data or local mocks and propose the smallest relevant fix, using the review and slices as reference. Preserve the deterministic runner and existing safety boundaries. Do not run production forms, change production approvals/settings, enable private attendance posting, install or switch a production snapshot, or create a schedule as part of development.

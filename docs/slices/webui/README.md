@@ -2,6 +2,8 @@
 
 The active coordinator brief is [ACTIVE_HANDOFF.md](../../ACTIVE_HANDOFF.md). Read it before taking a slice. All slices inherit its safety, privacy, scope, and validation requirements.
 
+**Deferred:** the user accepted the current stack and chose to wait for problems from real use. These slices are reference specifications, not an active implementation queue. Resume the full sequence only on a new user instruction; a reported break should receive the smallest justified fix.
+
 ## Order
 
 | Order | Slice | Required predecessor | Review findings covered |
