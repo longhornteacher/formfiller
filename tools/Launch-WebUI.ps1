@@ -78,7 +78,9 @@ try {
             SourceBundle = (Join-Path $artifacts 'formfiller-clean-source'); InstallDependencies = $true
         }
         $existingPython = Join-Path $repoRoot 'outputs\.venv\Scripts\python.exe'
-        if (Test-Path -LiteralPath $existingPython -PathType Leaf) { $installArgs.PythonPath = $existingPython }
+        . (Join-Path $PSScriptRoot 'Bootstrap-WebUI.ps1') -RepositoryRoot $repoRoot -AppDataRoot $AppDataRoot
+        if (Test-FormFillerPython $existingPython) { $installArgs.PythonPath = $existingPython }
+        else { $installArgs.PythonPath = Resolve-FormFillerPython (Join-Path $appRoot 'Dependencies') }
         & (Join-Path $repoRoot 'tools\Install-ReviewedSnapshot.ps1') `
             @installArgs
     }
@@ -89,11 +91,13 @@ try {
     Write-Output 'Opening FormFiller in your browser. Keep this window open while using it.'
     # The installed launcher verifies its complete inventory and hashes before
     # private data can be loaded. Opening the UI never requests a submission.
-    & $launcher --open
+    # Bind explicitly: a bare --open binds to the launcher's first positional
+    # parameter ($Workspace), producing Python's invalid --workspace --open.
+    & $launcher -WebArgs @('--open')
     if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }
     exit 0
 } catch {
     # Exception text may contain a private path. Show only fixed instructions.
-    Write-Output 'The WebUI could not start. Check that Python 3.11+ and PowerShell 7 are installed and the installed FormFiller snapshot is intact.'
+    Write-Output 'The WebUI could not start. Check internet access or ask school IT whether dependency installation is blocked. If FormFiller was already installed, its snapshot may need repair.'
     exit 2
 }

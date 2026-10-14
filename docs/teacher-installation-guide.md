@@ -4,10 +4,10 @@ This guide is for teachers using the installed Windows application. You do not n
 
 ## Install and open FormFiller
 
-FormFiller requires Windows, Python 3.11 or newer, and PowerShell 7. Keep the launcher window open while you use the application.
+Use 64-bit Windows on an Intel or AMD computer. You do not need to install Python or PowerShell yourself: the launcher prepares missing dependencies under your Windows account. First setup needs internet access. Keep the launcher window open while you use the application.
 
 1. Open `LaunchWebUI.bat` from the FormFiller folder.
-2. On first launch, wait for setup to finish and choose a private folder when prompted.
+2. On first launch, wait while setup downloads and installs missing dependencies, then choose a private folder when prompted. Existing Microsoft Edge is reused. If Edge is missing, Windows may request administrator approval to install it. If school policy blocks setup, ask IT to allow the downloads and installation; no manual commands are required in the normal setup flow.
 3. Keep that folder in the location selected by your school or district. Form settings and template responses are stored there. Browser sign-in and submission tracking stay on this computer.
 4. FormFiller opens in your browser. Use **Setup** to continue the checklist or **Forms** to work with saved forms.
 

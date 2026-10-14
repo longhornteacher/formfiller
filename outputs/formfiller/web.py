@@ -793,7 +793,7 @@ def main(argv=None):
             environment["PYTHONDONTWRITEBYTECODE"] = "1"
             command = ["pwsh", "-NoProfile", "-File", str(launcher)]
             if args.open:
-                command += ["--open"]
+                command += ["-WebArgs", "--open"]
             return subprocess.run(command, cwd=installed, env=environment).returncode
         if args.private:
             from .workspace import resolve_workspace
