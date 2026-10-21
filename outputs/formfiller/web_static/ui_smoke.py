@@ -105,6 +105,9 @@ def main() -> None:
                 assert page.locator(".content-panel .fresh-dot.changed").count() == 1  # absorbed Sync view
                 page.get_by_role("button", name="Check now").click()
                 page.get_by_text("Local checks completed.").wait_for()
+                page.get_by_role("button", name="Check all forms now").click()
+                page.get_by_text("Checked 4 forms: 3 up to date, 1 changed.").wait_for()
+                assert page.locator(".content-panel .fresh-dot.changed").count() == 1
                 capture("readiness")
                 page.locator('.nav-item[data-view="forms"]').click()
                 page.get_by_role("heading", name="All your forms in one place!", exact=True).wait_for()
