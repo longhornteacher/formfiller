@@ -232,13 +232,13 @@ h1, h2, h3, legend, .eyebrow, .brand { text-shadow: 1px 1px 0 rgba(255, 241, 201
 .editor-save-status { margin-right: auto; font-size: 11px; font-weight: 700; color: var(--green-dark); }
 
 /* ---------- Inputs ---------- */
-input[type=text], input[type=url], .answer-input, .answer-select, .answer-textarea, .inline-name input {
+input[type=text], input[type=url], input[type=search], .answer-input, .answer-select, .answer-textarea, .inline-name input {
   display: block; width: 100%; padding: 8px 10px; font: inherit; font-size: 12px; color: var(--ink);
   background: var(--parchment-light);
   border: 3px solid var(--wood-dark); border-radius: 3px;
   box-shadow: inset 2px 2px 0 rgba(139, 74, 23, .25); outline: none;
 }
-input[type=text]:focus, input[type=url]:focus, .answer-input:focus, .answer-select:focus, .answer-textarea:focus {
+input[type=text]:focus, input[type=url]:focus, input[type=search]:focus, .answer-input:focus, .answer-select:focus, .answer-textarea:focus {
   border-color: var(--outline); background: #fffbe8;
   box-shadow: inset 2px 2px 0 rgba(139, 74, 23, .25), 0 0 0 3px var(--gold);
 }
@@ -401,3 +401,16 @@ input[type=checkbox] { accent-color: var(--green); width: 15px; height: 15px; ma
 .heading-actions .answer-select { width: auto; min-width: 180px; }
 .course-picker { font-size: 11px; font-weight: 700; }
 .j-tag { margin-left: 8px; }
+.template-tools { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 24px; }
+.schedule-time { display: block; font-size: 13px; margin-top: 4px; color: var(--ink-soft); }
+.library-search { padding: 12px; border-bottom: 2px solid var(--parchment-dark); }
+.library-search input { width: 100%; min-width: 0; }
+.form-list-row[hidden] { display: none; }
+.editor-actions { flex-wrap: wrap; }
+.library-search .field-label { margin-top: 0; }
+.library-no-matches { padding: 0 12px 12px; color: var(--ink-soft); }
+.optional-schedule { margin-top: 24px; border-top: 2px dotted var(--wood-light); padding-top: 16px; }
+.optional-schedule summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); }
+.optional-schedule summary .tag { margin-left: 12px; }
+.optional-schedule p { font-size: 12px; line-height: 1.7; color: var(--ink-soft); }
+.prefill-note { font-size: 11px; line-height: 1.6; color: var(--ink-soft); margin: 18px 0 10px; }

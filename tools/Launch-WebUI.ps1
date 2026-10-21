@@ -67,6 +67,11 @@ try {
         $env:FORM_FILLER_WORKSPACE = $mapping.workspace
         $env:FORM_FILLER_RUNTIME = $mapping.runtime
         $env:FORM_FILLER_INSTALLED_APP = $mapping.installed_app
+    } elseif (Test-Path -LiteralPath (Join-Path $appRoot 'installation.json')) {
+        $installation = Get-Content -LiteralPath (Join-Path $appRoot 'installation.json') -Raw | ConvertFrom-Json
+        if ($installation.version -ne 1 -or -not ($installation.installed_app -is [string]) -or
+            -not [IO.Path]::IsPathFullyQualified($installation.installed_app)) { throw 'installation_invalid' }
+        $installedRoot = $installation.installed_app
     } else {
         Write-Output 'Setting up the FormFiller WebUI for first use...'
         $installedRoot = Join-Path $appRoot ('App\snapshot-ui-' + [Guid]::NewGuid().ToString('N').Substring(0, 12))
@@ -81,6 +86,8 @@ try {
         if (Test-Path -LiteralPath $existingPython -PathType Leaf) { $installArgs.PythonPath = $existingPython }
         & (Join-Path $repoRoot 'tools\Install-ReviewedSnapshot.ps1') `
             @installArgs
+        [IO.File]::WriteAllText((Join-Path $appRoot 'installation.json'),
+            (@{version=1; installed_app=$installedRoot} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
     $launcher = Join-Path $installedRoot 'Run-FormFillerPrivate.ps1'
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {

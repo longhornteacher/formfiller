@@ -103,6 +103,94 @@ class RunnerTests(unittest.TestCase):
             store.record_schema(form["alias"], schema_fp)
             store.record_schema(form["alias"], schema_fp, approved=True, config_fingerprint=config_fp)
 
+    def test_scheduled_dispatch_only_due_and_never_retries_failure(self):
+        from datetime import datetime
+        from outputs.formfiller import scheduling
+        from outputs.formfiller.state import _atomic_json
+        self._approve_all()
+        instant = datetime(2026, 10, 1, 12, 15, tzinfo=scheduling.ZONE)
+        store = StateStore(self.state_dir, self.today)
+        _atomic_json(store.day_dir / "schedule.json", {"date": store.day,
+            "slots": {form["alias"]: 721 if index < 2 else 900 for index, form in enumerate(self.forms)}, "claimed": []})
+        FakeBrowser.mismatch_alias = "F01"
+        with patch.object(scheduling, "now", return_value=instant):
+            self.assertEqual(self._run("--live", "--scheduled"), runner.EXIT_BROWSER)
+            self.assertEqual(FakeBrowser.instances[0].submitted, ["F02"])
+            count = len(FakeBrowser.instances)
+            self.assertEqual(self._run("--live", "--scheduled"), runner.EXIT_OK)
+            self.assertEqual(len(FakeBrowser.instances), count)
+        self.assertEqual(store.read("F01")["status"], "failed")
+        self.assertIsNone(store.read("F03"))
+
+    def test_scheduled_window_closed_does_not_open_browser(self):
+        from datetime import datetime
+        from outputs.formfiller import scheduling
+        with patch.object(scheduling, "now", return_value=datetime(2026, 10, 1, 15, 30, tzinfo=scheduling.ZONE)):
+            self.assertEqual(self._run("--live", "--scheduled"), runner.EXIT_OK)
+        self.assertEqual(FakeBrowser.instances, [])
+
+    def test_scheduled_calendar_rechecked_under_lock_before_browser(self):
+        with patch.object(runner, "load_calendar", side_effect=[True, False]):
+            self.assertEqual(self._run("--live", "--scheduled"), runner.EXIT_NOT_SCHOOL_DAY)
+        self.assertEqual(FakeBrowser.instances, [])
+
+    def test_paused_template_excluded_from_manual_run(self):
+        self._approve_all()
+        self.forms[0]["scheduled"] = False
+        (self.config / "forms.json").write_text(json.dumps({"forms": self.forms}))
+        self.assertEqual(self._run("--live"), runner.EXIT_OK)
+        self.assertNotIn("F01", FakeBrowser.instances[0].submitted)
+
+    def test_selected_unscheduled_form_submits_without_enrolling_or_running_others(self):
+        self._approve_all()
+        self.forms[0]["scheduled"] = False
+        path = self.config / "forms.json"
+        path.write_text(json.dumps({"forms": self.forms}))
+        before = runner._config_fingerprint(self.forms[0])
+        self.assertEqual(self._run("--live", "--form", "F01"), runner.EXIT_OK)
+        self.assertEqual(FakeBrowser.instances[-1].submitted, ["F01"])
+        saved = json.loads(path.read_text())["forms"][0]
+        self.assertEqual(runner._config_fingerprint(saved), before)
+        self.assertFalse(saved["scheduled"])
+        self.assertEqual(saved["last_submission"]["answers"], self.forms[0]["answers"])
+        self.assertIsNone(StateStore(self.state_dir, self.today).read("F02"))
+        self.assertEqual(self._run("--live", "--form", "F01"), runner.EXIT_OK)
+        self.assertEqual(FakeBrowser.instances[-1].submitted, [])
+
+    def test_unknown_selected_form_stops_before_browser(self):
+        self.assertEqual(self._run("--live", "--form", "unknown"), runner.EXIT_CONFIG)
+        self.assertEqual(FakeBrowser.instances, [])
+
+    def test_selected_form_still_requires_school_day(self):
+        with patch.object(runner, "load_calendar", return_value=False):
+            self.assertEqual(self._run("--live", "--form", "F01"), runner.EXIT_NOT_SCHOOL_DAY)
+        self.assertEqual(FakeBrowser.instances, [])
+
+    def test_uncertain_attempt_does_not_replace_last_confirmed_contents(self):
+        from datetime import timedelta
+        from outputs.formfiller.store import FormStore
+        self._approve_all()
+        private = FormStore(self.config)
+        prior = self.today - timedelta(days=1)
+        private.record_submission('F01', self.forms[0], prior, runner._config_fingerprint(self.forms[0]))
+        FakeBrowser.fail_after_click_alias = 'F01'
+        self.assertEqual(self._run('--live', '--form', 'F01'), runner.EXIT_BROWSER)
+        self.assertEqual(private.get_form('F01')['last_submission']['date'], prior.isoformat())
+        self.assertEqual(StateStore(self.state_dir, self.today).read('F01')['status'], 'uncertain')
+
+    def test_defaults_write_failure_does_not_change_confirmed_outcome_or_resubmit(self):
+        self._approve_all()
+        with patch.object(runner.FormStore, 'record_submission', side_effect=OSError('synthetic write failure')):
+            self.assertEqual(self._run('--live', '--form', 'F01'), runner.EXIT_OK)
+        self.assertEqual(StateStore(self.state_dir, self.today).read('F01')['status'], 'submitted')
+        self.assertEqual(self._run('--live', '--form', 'F01'), runner.EXIT_OK)
+        self.assertEqual(FakeBrowser.instances[-1].submitted, [])
+
+    def test_preview_never_records_a_confirmed_submission(self):
+        with patch.object(runner.FormStore, 'record_submission') as remember:
+            self.assertEqual(self._run('--preview', '--form', 'F01'), runner.EXIT_OK)
+        remember.assert_not_called()
+
     def test_calendar_age_failure_stops_before_browser(self):
         class CalendarError(Exception):
             code = "calendar_stale"

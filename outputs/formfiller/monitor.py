@@ -57,8 +57,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--calendar", type=Path, default=paths.config_dir / "calendar.json")
     parser.add_argument("--forms", type=Path, default=paths.config_dir / "forms.json")
     parser.add_argument("--state-dir", type=Path, default=paths.state_dir)
-    parser.add_argument("--after", type=time.fromisoformat, default=time(9, 0), metavar="HH:MM",
-                        help="Chicago local time after which a school-day run is expected (default: 09:00)")
+    parser.add_argument("--after", type=time.fromisoformat, default=time(15, 30), metavar="HH:MM",
+                        help="Chicago local time after which a school-day run is expected (default: 15:30)")
     parser.add_argument("--max-calendar-age-days", type=int, default=14)
     parser.add_argument("--date", dest="date_override", type=date.fromisoformat, metavar="YYYY-MM-DD",
                         help="date to inspect; defaults to today in America/Chicago")
@@ -91,7 +91,8 @@ def main(argv=None) -> int:
             if not isinstance(records, list):
                 raise ValueError
             active_records = [row for row in records
-                              if isinstance(row, dict) and row.get("active", True) is True]
+                              if isinstance(row, dict) and row.get("active", True) is True
+                              and row.get("scheduled", True) is True]
             # Draft records do not participate in the daily run until a URL,
             # captured schema, and matching answers have all been configured.
             ready_records = [row for row in active_records

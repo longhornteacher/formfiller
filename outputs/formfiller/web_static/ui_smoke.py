@@ -64,17 +64,25 @@ def main() -> None:
                 page.goto(base_url, wait_until="networkidle")
 
                 assert page.locator("#mode-badge").inner_text() == "Demo · synthetic data"
-                assert page.get_by_role("heading", name="Forms", exact=True).count() == 1
+                assert page.get_by_role("heading", name="All your forms in one place!", exact=True).count() == 1
                 assert page.locator(".summary-strip").count() == 0
                 assert page.locator(".form-list-row").count() == 4
                 assert page.locator("#choose-workspace").count() == 0
+                assert not page.locator('.optional-schedule').get_attribute('open')
+                assert page.get_by_role('button', name='Pause schedule', exact=True).is_hidden()
+                page.locator('#find-form').fill('form 2')
+                assert page.locator('.form-list-row:visible').count() == 1
+                page.locator('#find-form').fill('no synthetic match')
+                assert page.locator('#no-form-matches').is_visible()
+                page.locator('#find-form').fill('')
+                assert page.locator('.form-list-row:visible').count() == 4
 
                 page.locator(".form-list-row").first.click()
                 assert not errors, "frontend raised a browser error before editing"
                 assert page.locator("#inline-answer-fields [data-answer]").count() == 2
                 capture_path = os.environ.get("FORMFILLER_UI_CAPTURE_PATH")
                 if capture_path:
-                    page.screenshot(path=capture_path)
+                    page.screenshot(path=capture_path, full_page=True)
 
                 page.get_by_role("button", name="Today").click()
                 run_button = page.get_by_role("button", name="Run today's forms")
@@ -91,6 +99,9 @@ def main() -> None:
                 page.locator("#form-url").fill("https://forms.office.com/Pages/ResponsePage.aspx?id=synthetic-smoke")
                 page.get_by_role("button", name="Inspect form").click()
                 page.locator("#answers-step").wait_for(state="visible")
+                page.get_by_role("button", name="Save form").click()
+                page.locator('#dialog-notice').wait_for(state='visible')
+                assert 'required' in page.locator('#dialog-notice').inner_text().lower()
                 page.locator('#answer-fields [data-answer="q0"]').fill("Synthetic response")
                 page.locator('#answer-fields [data-answer="q1"]').select_option(label="Option A")
                 page.get_by_role("button", name="Save form").click()
@@ -116,6 +127,28 @@ def main() -> None:
                 assert approve.is_enabled()
                 approve.click()
                 page.get_by_text("Saved answers approved for this form.").wait_for()
+
+                page.locator('.optional-schedule summary').click()
+                page.get_by_role("button", name="Add to schedule", exact=True).click()
+                page.get_by_text("Template added to the school-day schedule.").wait_for()
+                page.locator('.optional-schedule summary').click()
+                page.get_by_role("button", name="Pause schedule", exact=True).click()
+                page.get_by_text("Template paused.").wait_for()
+                page.get_by_role('button', name='Fill & submit', exact=True).click()
+                page.get_by_text('Form submitted in the demo.').wait_for()
+                assert page.get_by_role('button', name='Submitted today', exact=True).is_disabled()
+                assert 'Pre-filled from last submission' in page.locator('.prefill-note').inner_text()
+                page.reload(wait_until='networkidle')
+                page.locator('.form-list-row').filter(has_text='Smoke edited form').click()
+                assert page.locator('#inline-answer-fields [data-answer="q0"]').input_value() == 'Updated synthetic answer'
+                assert page.locator('#inline-answer-fields [data-answer="q1"]').input_value() == 'Option A'
+                assert 'Pre-filled from last submission' in page.locator('.prefill-note').inner_text()
+                page.get_by_role("button", name="Refresh questions / URL").click()
+                page.get_by_role("button", name="Inspect form").click()
+                page.locator("#answers-step").wait_for(state="visible")
+                assert page.locator('#answer-fields [data-answer="q0"]').input_value() == "Updated synthetic answer"
+                assert page.locator('#answer-fields [data-answer="q1"]').input_value() == "Option A"
+                page.locator('#form-dialog [data-close-dialog]').first.click()
 
                 page.get_by_role("button", name="Remove form").click()
                 page.get_by_role("button", name="Remove form", exact=True).last.click()

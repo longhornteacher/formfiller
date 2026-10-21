@@ -11,11 +11,11 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_PARTS = {"config", "state", "reports", "logs", "observed", "browser-profile", ".venv", "__pycache__"}
-PRIVATE_NAMES = {"forms.json", "settings.json", "paths.json", ".formfiller-owner.json", "Accommodation Log.txt"}
+PRIVATE_NAMES = {"forms.json", "settings.json", "paths.json", "installation.json", ".formfiller-owner.json", "Accommodation Log.txt"}
 PUBLIC_CALENDAR = "calendar/Pearland_2026-27_SchoolDays.json"
 CALENDAR_KEYS = {"district", "school_year", "source", "complete", "coverage_start", "coverage_end",
                  "school_days", "non_school_days", "early_release_days"}
-TEXT_SUFFIXES = {".py", ".ps1", ".bat", ".md", ".txt", ".html", ".js", ".css"}
+TEXT_SUFFIXES = {".py", ".ps1", ".bat", ".md", ".txt", ".html", ".js", ".css", ".svg"}
 PATTERNS = {
     "personal_windows_path": re.compile(r"(?i)(?:[A-Z]:[\\/]+Users[\\/]+[^\s\\/\"']+|OneDrive\s*-\s*)"),
     "email_address": re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"),
