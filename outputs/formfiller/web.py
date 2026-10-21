@@ -24,7 +24,7 @@ from .calendar import CalendarError, load_calendar
 from .runner import _config_fingerprint, _schema_fingerprint, _remember_submission
 from .skyward import (MARKS, SkywardSession, demo_courses, demo_roster, load_config, staged_counts,
                       suggest_mark)
-from .state import StateError, StateStore
+from .state import StateError, StateStore, _atomic_json
 from . import scheduling, taskplan
 
 SAFE_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
@@ -149,6 +149,9 @@ def initialize_demo(config_dir, state_dir):
         store.record_schema(form["alias"], _schema_fingerprint(schema))
         store.record_schema(form["alias"], _schema_fingerprint(schema), approved=True,
                             config_fingerprint=_config_fingerprint(form))
+        _atomic_json(state_dir / "checks" / f'{form["alias"]}.json', {"checked_on": day.isoformat()})
+    # One synthetic form shows how a change on the live form is surfaced.
+    _atomic_json(state_dir / "changes" / "F04.json", {"code": "schema_options_updated"})
 
 
 def verify_installation(root):
@@ -240,6 +243,10 @@ class WebApp:
         configured = bool(form.get("url") and form.get("schema") and form.get("answers"))
         approved = configured and state.schema_approved(form["alias"], _schema_fingerprint(form["schema"]), _config_fingerprint(form))
         change = state._read_json(state.root / "changes" / f"{form_id}.json", {})
+        check = state._read_json(state.root / "checks" / f"{form_id}.json", {})
+        checked_on = check.get("checked_on") if isinstance(check, dict) else None
+        if not (isinstance(checked_on, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", checked_on)):
+            checked_on = None
         record = state.read(form_id) or {}
         daily_plan = state._read_json(state.day_dir / "schedule.json", {"claimed": []})
         claimed = form_id in daily_plan.get("claimed", [])
@@ -249,6 +256,8 @@ class WebApp:
                 "last_submitted_on": (form.get("last_submission") or {}).get("date"),
                 "review_required": not approved, "configured": configured,
                 "scheduled": scheduling.enabled(form), "change_code": change.get("code"),
+                "freshness": {"state": "changed" if change.get("code") else "current",
+                              "checked_on": checked_on},
                 "today_status": record.get("status", "pending"),
                 "can_submit": bool(approved and record.get("status", "pending") == "pending" and not claimed),
                 "review_token": _config_fingerprint(form) if configured else None}
@@ -277,7 +286,7 @@ class WebApp:
                           "scheduled_time": (f'{schedule["slots"][form["id"]] // 60:02}:{schedule["slots"][form["id"]] % 60:02}'
                                              if form["scheduled"] and form["id"] in schedule["slots"] else None),
                           "schedule_claimed": form["id"] in schedule["claimed"],
-                          "change_code": form["change_code"],
+                          "change_code": form["change_code"], "freshness": form["freshness"],
                           "review_required": form["review_required"]})
         counts = {status: sum(item["status"] == status for item in items) for status in STATUSES}
         checks = self.readiness()
@@ -441,7 +450,9 @@ class WebApp:
                     saved["alias"], _schema_fingerprint(saved["schema"]), _config_fingerprint(saved)):
                 StateStore(self.state_dir, today()).record_schema(saved["alias"], _schema_fingerprint(saved["schema"]))
             if token:
+                # The questions were just read from the live form, so it is current as of today.
                 (self.state_dir / "changes" / f'{saved["alias"]}.json').unlink(missing_ok=True)
+                _atomic_json(self.state_dir / "checks" / f'{saved["alias"]}.json', {"checked_on": today().isoformat()})
         return self.form(created["id"])
 
     def approve_form(self, form_id, payload):

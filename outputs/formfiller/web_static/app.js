@@ -6,9 +6,32 @@
   const confirmDialog = document.querySelector('#confirm-dialog');
   const setupForm = document.querySelector('#form-setup');
   const state = { course: '', csrf: '', view: 'forms', forms: [], search: '', selectedId: null, removeId: null, inspection: null, session: {}, skyward: null, skywardCourses: [] };
-  const viewNames = { forms: 'Forms', today: 'Today', attendance: 'Attendance Preview', history: 'History', sync: 'Sync', readiness: 'Readiness', setup: 'Setup', guide: 'Teacher Guide', skyward: 'Skyward' };
+  const viewNames = { forms: 'Forms', today: 'Today', attendance: 'Attendance Preview', history: 'History', readiness: 'Readiness', setup: 'Setup', guide: 'Teacher Guide', skyward: 'Skyward' };
   const safeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const dateLabel = value => value ? safeText(value) : '—';
+  const shortDate = iso => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!match) return '';
+    const day = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const now = new Date();
+    if (day.toDateString() === now.toDateString()) return 'today';
+    return day.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(day.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) });
+  };
+  // Green: the saved questions match the live form as last checked. Red: the live form changed.
+  const freshness = form => {
+    const changed = form?.freshness?.state === 'changed' || Boolean(form?.change_code);
+    const checked = form?.freshness?.checked_on ? `checked ${shortDate(form.freshness.checked_on)}` : 'not checked yet';
+    const label = !changed ? 'Up to date' : form.change_code === 'schema_options_updated' ? 'Form changed · answers kept' : 'Form changed · needs review';
+    return { changed, label, detail: `${label} · ${checked}` };
+  };
+  const freshDot = (form, brief = false) => { const fresh = freshness(form); return `<span class="fresh-dot ${fresh.changed ? 'changed' : 'current'}" role="img" aria-label="${safeText(brief ? fresh.label : fresh.detail)}" title="${safeText(fresh.detail)}"></span>`; };
+  const updateFormsNav = () => {
+    const changed = state.forms.filter(form => freshness(form).changed).length;
+    const item = document.querySelector('.nav-item[data-view="forms"]');
+    item.querySelector('.nav-alert')?.remove();
+    if (changed) item.insertAdjacentHTML('beforeend', `<span class="nav-alert" role="img" aria-label="${changed} ${changed === 1 ? 'form has' : 'forms have'} changed" title="${changed} ${changed === 1 ? 'form has' : 'forms have'} changed"></span>`);
+  };
+  const statusLabels = { submitted: 'Submitted', failed: 'Failed', uncertain: 'Needs review', submitting: 'Submitting', pending: 'Not yet submitted', missing: 'Missing' };
   const showNotice = (message, kind = 'info') => {
     notice.textContent = message;
     notice.className = `notice ${kind}`;
@@ -47,13 +70,18 @@
     return data;
   };
   const buttonBusy = (button, busy, text) => { if (!button) return; button.disabled = busy; if (text) button.textContent = text; };
-  const loadForms = async () => { const data = await request('/api/forms'); state.forms = Array.isArray(data.forms) ? data.forms : []; if (!state.forms.some(form => form.id === state.selectedId)) state.selectedId = state.forms[0]?.id || null; renderForms(); };
+  const loadForms = async () => { const data = await request('/api/forms'); state.forms = Array.isArray(data.forms) ? data.forms : []; if (!state.forms.some(form => form.id === state.selectedId)) state.selectedId = state.forms[0]?.id || null; updateFormsNav(); renderForms(); };
   const nav = document.querySelector('.nav-list');
+  // Secondary pages open from their parent page and keep that menu item highlighted.
+  const parentView = { guide: 'setup', skyward: 'attendance' };
   const navigateView = view => {
+    if (view === 'sync') view = 'readiness';
     state.view = view;
-    nav.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
-    document.querySelector('#crumb-current').textContent = viewNames[view] || 'Workspace';
+    const active = parentView[view] || view;
+    nav.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === active));
+    document.querySelector('#crumb-current').textContent = parentView[view] ? `${viewNames[active]} / ${viewNames[view]}` : (viewNames[view] || 'Workspace');
     clearNotice();
+    window.scrollTo(0, 0);
     loadView().catch(error => showNotice('This view could not be loaded. Refresh and try again.', 'error'));
   };
   nav.addEventListener('click', event => {
@@ -71,8 +99,7 @@
     if (state.view === 'today') renderToday(data);
     else if (state.view === 'attendance') renderAttendance(data);
     else if (state.view === 'history') renderHistory(data);
-    else if (state.view === 'readiness') renderReadiness(data);
-    else if (state.view === 'sync') renderSync(data);
+    else if (state.view === 'readiness') await renderReadiness(data);
   };
   const modeLabel = mode => /demo/i.test(String(mode || '')) ? 'Demo · synthetic data' : 'Private local workspace';
   const renderForms = () => {
@@ -102,11 +129,19 @@
     root.querySelector('#inline-answer-fields')?.addEventListener('change', updateApprovalState);
     root.querySelector('#editor-name')?.addEventListener('input', updateApprovalState);
     root.querySelector('#approve-answers')?.addEventListener('click', approveAnswers);
+    root.querySelector('#editor-steps')?.addEventListener('click', event => {
+      const target = event.target.closest('[data-step-target]')?.dataset.stepTarget;
+      if (!target) return;
+      if (target === 'run') root.querySelector('.optional-schedule')?.setAttribute('open', '');
+      const section = root.querySelector(target === 'review' && !root.querySelector('.review-prompt') ? '#step-save' : `#step-${target}`);
+      section?.scrollIntoView({behavior: 'smooth', block: 'center'});
+      section?.querySelector('button:not(:disabled), input:not(:disabled)')?.focus({preventScroll: true});
+    });
     root.querySelector('#submit-form')?.addEventListener('click', submitForm);
     const filterForms = () => {
       let matches = 0;
       root.querySelectorAll('[data-select-form]').forEach(row => {
-        row.hidden = !row.querySelector('.form-list-name').textContent.toLowerCase().includes(state.search.toLowerCase());
+        row.hidden = !row.querySelector('.form-list-title').textContent.toLowerCase().includes(state.search.toLowerCase());
         if (!row.hidden) matches += 1;
       });
       const empty = root.querySelector('#no-form-matches');
@@ -124,17 +159,18 @@
         await loadForms();
       } catch (error) { showNotice(error.message, 'error'); button.disabled=false; button.textContent=selected.scheduled ? 'Pause schedule' : 'Add to schedule'; }
     });
-    root.querySelector('#refresh-template')?.addEventListener('click', () => {
+    root.querySelectorAll('#refresh-template, #refresh-changed').forEach(button => button.addEventListener('click', () => {
       if (editorIsDirty(selected)) { showNotice('Save your changes before refreshing the questions.', 'info'); return; }
       openCreate(selected);
-    });
+    }));
     updateApprovalState();
   };
   const formListRow = form => {
     const questions = normalizedQuestions(form.schema).length;
     const needsReview = Boolean(form.review_required);
     const status = form.today_status === 'submitted' ? 'Submitted today' : needsReview ? 'Needs review' : form.can_submit ? 'Ready to fill' : 'Check required';
-    return `<button class="form-list-row ${form.id === state.selectedId ? 'selected' : ''}" data-select-form="${safeText(form.id)}"><span class="form-list-name">${safeText(form.name || 'Untitled form')}</span><span class="form-list-sub">${questions} ${questions===1?'question':'questions'} · ${status}${form.change_code?' · Form changed':''}</span></button>`;
+    const fresh = freshness(form);
+    return `<button class="form-list-row ${form.id === state.selectedId ? 'selected' : ''} ${fresh.changed ? 'changed' : ''}" data-select-form="${safeText(form.id)}"><span class="form-list-name">${freshDot(form, true)}<span class="form-list-title">${safeText(form.name || 'Untitled form')}</span></span><span class="form-list-sub">${fresh.changed ? `<span class="changed-text">${safeText(fresh.label)}</span> · ` : ''}${questions} ${questions===1?'question':'questions'} · ${status}${form.scheduled ? ' · Scheduled' : ''}</span></button>`;
   };
   const openCreate = (form = null) => {
     clearNotice();
@@ -152,10 +188,26 @@
   };
   const formEditor = form => {
     const review = form.review_required ? `<div class="review-prompt"><strong>Review these saved answers before use.</strong><label><input id="reviewed-answers" type="checkbox"> I reviewed these saved answers</label><button id="approve-answers" class="button secondary" disabled>Approve saved answers</button><span id="review-save-help" class="review-help" hidden>Save changes before reviewing these answers.</span>${form.review_token ? '' : '<span class="review-help">Current review approval is unavailable. Refresh the form before approving.</span>'}</div>` : '';
-    const warning = form.change_code ? `<div class="notice-box" role="status"><strong>The form has changed.</strong> ${form.change_code === 'schema_options_updated' ? 'Available answers were kept; added options were left unselected and removed items were ignored.' : 'This template needs review before it can run again. Other templates can continue.'} Refresh the questions to review the latest version.</div>` : '';
-    return `<div class="editor-heading"><div><p class="eyebrow">YOUR FORM</p><h2>${safeText(form.name || 'Untitled form')}</h2><p class="editor-subtitle">Fill in your answers and save them for reuse. Submit when you're ready.</p></div><button class="text-action remove" id="remove-inline-form">Remove form</button></div>${warning}<div class="template-tools"><button class="button secondary" id="refresh-template">Refresh questions / URL</button></div><div class="inline-name"><label for="editor-name">Form name</label><input id="editor-name" type="text" maxlength="120" value="${safeText(form.name || '')}"></div><div id="inline-answer-fields" class="answer-fields"></div>${review}
-      <div class="editor-actions"><span class="editor-save-status" id="editor-save-status" aria-live="polite"></span><button id="save-inline-form" class="button secondary">Save changes</button><button id="submit-form" class="button primary" ${form.can_submit ? '' : 'disabled'}>${form.today_status === 'submitted' ? 'Submitted today' : 'Fill & submit'}</button></div>
-      <details class="optional-schedule"><summary>Scheduling (optional)<span class="tag">${form.scheduled ? 'On' : 'Off'}</span></summary><p>Automatically submit this saved form on school days, at a different time between 12:00 PM and 3:30 PM Central. Keep this computer awake and signed in; this window can be closed.</p><button class="button secondary" id="schedule-form" ${!form.scheduled && form.review_required ? 'disabled' : ''}>${form.scheduled ? 'Pause schedule' : 'Add to schedule'}</button></details>`;
+    const fresh = freshness(form);
+    const warning = fresh.changed ? `<div class="notice-box changed-box" role="status"><strong>This form changed on its site.</strong> ${form.change_code === 'schema_options_updated' ? 'Your answers were kept and it can still run: new choices were left unselected and removed choices were dropped.' : 'It will not run until you refresh the questions and review your answers. Your other forms are not affected.'}<div class="changed-actions"><button class="button ${form.change_code === 'schema_options_updated' ? 'secondary' : 'primary'}" id="refresh-changed">Refresh questions</button></div></div>` : '';
+    return `<div class="editor-heading"><div><p class="eyebrow">YOUR FORM</p><h2>${safeText(form.name || 'Untitled form')}</h2><p class="freshness-line ${fresh.changed ? 'changed' : ''}">${freshDot(form)}<span>${safeText(fresh.detail)}</span></p></div>${fresh.changed ? '' : '<button class="button secondary" id="refresh-template" title="Read the questions from the live form again, or change its link">Refresh questions</button>'}</div>${warning}<ol class="flow-steps" id="editor-steps" aria-label="Steps for this form">${editorSteps(form, false)}</ol><div class="inline-name"><label for="editor-name">Form name</label><input id="editor-name" type="text" maxlength="120" value="${safeText(form.name || '')}"></div><div id="inline-answer-fields" class="answer-fields"></div>
+      <div class="editor-actions" id="step-save"><span class="editor-save-status" id="editor-save-status" aria-live="polite"></span><button id="save-inline-form" class="button secondary">Save changes</button></div>
+      <div id="step-review">${review}</div>
+      <section class="run-section" id="step-run" aria-labelledby="run-heading"><div class="run-head"><div><h3 id="run-heading">Run this form</h3><p>Submit it now, or let FormFiller submit it on school days.</p></div><button id="submit-form" class="button primary" ${form.can_submit ? '' : 'disabled'}>${form.today_status === 'submitted' ? 'Submitted today' : 'Fill & submit'}</button></div>
+      <details class="optional-schedule" ${state.openSchedule === form.id ? 'open' : ''}><summary>Scheduling (optional)<span class="tag ${form.scheduled ? 'good' : ''}">${form.scheduled ? 'On' : 'Off'}</span></summary><p>Automatically submit this saved form on school days, at a different time between 12:00 PM and 3:30 PM Central. Keep this computer awake and signed in; this window can be closed.</p>${!form.scheduled && form.review_required ? '<p class="review-help">Review and approve the saved answers above before scheduling.</p>' : ''}<button class="button secondary" id="schedule-form" ${!form.scheduled && form.review_required ? 'disabled' : ''}>${form.scheduled ? 'Pause schedule' : 'Add to schedule'}</button></details></section>
+      <div class="editor-danger"><button class="text-action remove" id="remove-inline-form">Remove form</button></div>`;
+  };
+  // Save -> Review -> Run, recomputed as the teacher edits so the next action is always marked.
+  const editorSteps = (form, dirty) => {
+    const saved = form.configured && !dirty;
+    const reviewed = saved && !form.review_required;
+    const ran = reviewed && (form.scheduled || form.today_status === 'submitted');
+    const steps = [
+      ['save', 'Save answers', saved ? 'Saved' : 'Unsaved changes', saved, !saved],
+      ['review', 'Review & approve', reviewed ? 'Approved' : saved ? 'Needed' : 'After saving', reviewed, saved && !reviewed],
+      ['run', 'Submit or schedule', form.scheduled ? (reviewed ? 'Scheduled' : 'Scheduled · waits for approval') : form.today_status === 'submitted' ? 'Submitted today' : reviewed ? 'Ready' : 'After approval', ran, reviewed && !ran],
+    ];
+    return steps.map(([key, title, detail, done, current], index) => `<li class="flow-step ${done ? 'done' : ''} ${current ? 'current' : ''}"><button type="button" data-step-target="${key}" ${current ? 'aria-current="step"' : ''}><i aria-hidden="true">${done ? '✓' : index + 1}</i><span><b>${title}</b><small>${detail}</small></span></button></li>`).join('');
   };
   const canonicalAnswer = value => Array.isArray(value) ? [...value].sort() : (value ?? '');
   const editorIsDirty = form => {
@@ -170,6 +222,8 @@
     const form = state.forms.find(item => item.id === state.selectedId);
     const submitButton = document.querySelector('#submit-form');
     if (form && submitButton) submitButton.disabled = !form.can_submit || editorIsDirty(form);
+    const steps = document.querySelector('#editor-steps');
+    if (form && steps) steps.innerHTML = editorSteps(form, editorIsDirty(form));
     const checkbox = document.querySelector('#reviewed-answers');
     const button = document.querySelector('#approve-answers');
     if (!form?.review_required || !checkbox || !button) return;
@@ -204,8 +258,11 @@
     buttonBusy(button, true, 'Approving…');
     try {
       await request(`/api/forms/${encodeURIComponent(form.id)}/approve`, {method:'POST', body:{review_token:form.review_token}});
-      showNotice('Saved answers approved for this form.', 'success');
+      showNotice('Saved answers approved. Submit it now or add it to the schedule.', 'success');
+      state.openSchedule = form.id;
       await loadForms();
+      state.openSchedule = null;
+      document.querySelector('#step-run')?.scrollIntoView({behavior: 'smooth', block: 'center'});
     } catch (error) {
       if (/stale|expired|changed/i.test(error.code || '')) {
         showNotice('This form changed since it was reviewed. The latest answers have been reloaded.', 'info');
@@ -245,7 +302,7 @@
       document.querySelector('#details-step').hidden = true;
       document.querySelector('#answers-step').hidden = false;
       document.querySelector('#dialog-title').textContent = 'Configure answers';
-      document.querySelector('#inspection-summary').textContent = `${Array.isArray(result.schema?.questions) ? result.schema.questions.length : 0} question(s) found. Enter template responses, save, then review them. Unsupported question types are left unresolved and cannot pass schema approval.`;
+      document.querySelector('#inspection-summary').textContent = (count => `${count} ${count === 1 ? 'question' : 'questions'} found. Fill in your answers and save; you’ll review them once more before the form can run.${result.schema.questions.some(q => q.type === 'unsupported') ? ' Some questions use a type FormFiller can’t fill yet and are marked below.' : ''}`)(Array.isArray(result.schema?.questions) ? result.schema.questions.length : 0);
       document.querySelector('#save-form-button').textContent = 'Save form';
       renderAnswerFields(result.schema || {questions:[]}, result.answers || {});
       updateSteps(2);
@@ -258,7 +315,7 @@
   document.querySelector('#back-button').addEventListener('click', () => {
     document.querySelector('#answers-step').hidden = true;
     document.querySelector('#details-step').hidden = false;
-    document.querySelector('#dialog-title').textContent = 'Add a form';
+    document.querySelector('#dialog-title').textContent = state.editingId ? 'Refresh form template' : 'Add a form';
     updateSteps(1);
   });
   const normalizedQuestions = schema => Array.isArray(schema?.questions) ? schema.questions : Array.isArray(schema?.fields) ? schema.fields : Array.isArray(schema) ? schema : [];
@@ -346,7 +403,7 @@
   };
   const renderToday = data => {
     const items = Array.isArray(data.items) ? data.items : [];
-    root.innerHTML = `<div class="page-heading"><div><h1>Today</h1><p>School-day schedule · 12:00 PM–3:30 PM Central · ${dateLabel(data.date)}</p><p class="today-mode">${safeText(modeLabel(data.mode || state.session.mode))}</p></div><button id="run-today" class="button primary" ${data.can_run === false ? 'disabled' : ''}>Run today's forms</button></div><div class="notice-box">Times are chosen automatically each day. “Run today's forms” runs the scheduled templates immediately.${data.schedule_code ? ` Schedule status: ${safeText(data.schedule_code.replaceAll('_',' '))}.` : ''}</div><div class="today-run-note" id="today-run-note" ${data.can_run === false ? '' : 'hidden'}>A run is unavailable until local readiness checks allow it.</div><div class="today-meta"><span><b>Date</b> ${dateLabel(data.date)}</span><span><b>Forms</b> ${items.length}</span></div><div class="section-title-row"><h2>Today's forms</h2></div>${items.length ? `<div class="row-list">${items.map(item=>`<div class="list-row"><div><strong>${safeText(item.name || 'Form')}</strong><span class="schedule-time">${safeText(scheduledLabel(item))}</span></div><span class="tag ${statusClass(item.status)}">${safeText(item.status || 'Pending')}</span></div>`).join('')}</div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">◷</div><h2>No activity today</h2><p>Add a saved template to the schedule to see it here.</p></div>`}`;
+    root.innerHTML = `<div class="page-heading"><div><h1>Today</h1><p>${safeText(shortDate(data.date) === 'today' ? new Date().toLocaleDateString(undefined, {weekday:'long', month:'long', day:'numeric'}) : data.date)} · School-day schedule, 12:00 PM–3:30 PM Central</p></div><button id="run-today" class="button primary" ${data.can_run === false ? 'disabled' : ''}>Run today's forms</button></div><div class="notice-box">Times are chosen automatically each day. “Run today's forms” runs the scheduled templates immediately.${data.schedule_code ? ` Schedule status: ${safeText(data.schedule_code.replaceAll('_',' '))}.` : ''}</div><div class="today-run-note" id="today-run-note" ${data.can_run === false ? '' : 'hidden'}>A run is unavailable until local readiness checks allow it.</div><div class="section-title-row"><h2>Today's forms</h2><span class="count-label">${items.length} ${items.length === 1 ? 'form' : 'forms'}</span></div>${items.length ? `<div class="row-list">${items.map(item=>`<div class="list-row"><div><strong class="row-title">${freshDot(item, true)}${safeText(item.name || 'Form')}</strong><span class="schedule-time">${safeText(scheduledLabel(item))}${freshness(item).changed ? ` · <span class="changed-text">${safeText(freshness(item).label)}</span>` : ''}</span></div><span class="tag ${statusClass(item.status)}">${safeText(statusLabels[item.status] || item.status || 'Not yet submitted')}</span></div>`).join('')}</div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">◷</div><h2>No activity today</h2><p>Add a saved template to the schedule to see it here.</p></div>`}`;
     root.querySelector('#run-today').addEventListener('click', async event => {
       const button = event.currentTarget;
       clearNotice(); buttonBusy(button, true, 'Starting…');
@@ -365,7 +422,7 @@
     const picker = courses.length ? `<label class="course-picker" for="course-select">Class</label><select id="course-select" class="answer-select" ${locked ? 'disabled' : ''}>${courses.map(course => `<option value="${safeText(course.id)}" ${course.id === chosen ? 'selected' : ''}>${safeText(course.name)}${course.period ? ` (${safeText(course.period)})` : ''}</option>`).join('')}</select>` : '';
     const rows = students.map(student => `<div class="student-row ${safeText(student.mark)}"><div class="student-name"><strong>${safeText(student.name)}</strong>${student.suggested === 'absent' ? '<span class="tag warn j-tag">J rule</span>' : ''}${Object.keys(student.details || {}).length ? `<small>${Object.entries(student.details).map(([key, value]) => `${safeText(key)} ${safeText(value)}`).join(' · ')}</small>` : ''}</div><div class="mark-group" role="group" aria-label="Attendance for ${safeText(student.name)}">${Object.entries(markLabels).map(([mark, label]) => `<button type="button" class="mark-button ${mark} ${student.mark === mark ? 'on' : ''}" data-student="${safeText(student.id)}" data-mark="${mark}" aria-pressed="${student.mark === mark}" ${locked ? 'disabled' : ''}>${label}</button>`).join('')}</div></div>`).join('');
     const demoMode = (data.mode || state.session.mode) === 'demo';
-    root.innerHTML = `<div class="page-heading"><div><h1>Attendance Preview</h1><p>Review the local roster and marks for ${dateLabel(data.date)}. Posting has not been verified.</p><p class="today-mode">${safeText(modeLabel(data.mode || state.session.mode))}</p></div><div class="heading-actions">${picker}<button id="load-roster" class="button primary" ${locked || !courses.length ? 'disabled' : ''}>${students.length ? 'Reload roster' : 'Load roster'}</button></div></div>${postingUnavailable ? '<div class="notice-box">Send attendance is disabled in the private app while Skyward posting is unavailable. Review every mark; this preview does not post attendance.</div>' : '<div class="notice-box">This is a synthetic preview. The demo action only simulates a result and does not send attendance.</div>'}${courses.length ? '' : '<div class="notice-box">No Skyward classes are configured yet. Open Skyward settings to add a class in the private workspace.</div><button type="button" class="button secondary" data-go="skyward">Skyward settings</button>'}${students.length ? `<div class="today-meta"><span><b>Students</b> ${students.length}</span><span><b>Here</b> ${counts.present ?? 0}</span><span><b>Absent</b> ${counts.absent ?? 0}</span><span><b>Tardy</b> ${counts.tardy ?? 0}</span></div><div class="roster-panel">${rows}</div><div class="editor-actions"><span class="editor-save-status" id="attendance-status" aria-live="polite">${locked ? 'Demo preview complete' : 'Preview only'}</span><button id="submit-attendance" class="button primary" ${locked || postingUnavailable ? 'disabled' : ''}>${postingUnavailable ? 'Send attendance' : 'Simulate attendance (demo)'}</button></div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">🍎</div><h2>No roster loaded</h2><p>A J in a neighboring period suggests an absence. Review every mark. Names stay on this computer.</p></div>`}`;
+    root.innerHTML = `<div class="page-heading"><div><h1>Attendance Preview</h1><p>Review the local roster and marks for ${dateLabel(data.date)}. Posting has not been verified.</p><p class="today-mode">${safeText(modeLabel(data.mode || state.session.mode))}</p></div><div class="heading-actions">${picker}${courses.length ? '<button type="button" class="button secondary" data-go="skyward">Skyward settings</button>' : ''}<button id="load-roster" class="button primary" ${locked || !courses.length ? 'disabled' : ''}>${students.length ? 'Reload roster' : 'Load roster'}</button></div></div>${postingUnavailable ? '<div class="notice-box">Send attendance is disabled in the private app while Skyward posting is unavailable. Review every mark; this preview does not post attendance.</div>' : '<div class="notice-box">This is a synthetic preview. The demo action only simulates a result and does not send attendance.</div>'}${courses.length ? '' : '<div class="notice-box">No Skyward classes are configured yet. Open Skyward settings to add a class in the private workspace.</div><button type="button" class="button secondary" data-go="skyward">Skyward settings</button>'}${students.length ? `<div class="today-meta"><span><b>Students</b> ${students.length}</span><span><b>Here</b> ${counts.present ?? 0}</span><span><b>Absent</b> ${counts.absent ?? 0}</span><span><b>Tardy</b> ${counts.tardy ?? 0}</span></div><div class="roster-panel">${rows}</div><div class="editor-actions"><span class="editor-save-status" id="attendance-status" aria-live="polite">${locked ? 'Demo preview complete' : 'Preview only'}</span><button id="submit-attendance" class="button primary" ${locked || postingUnavailable ? 'disabled' : ''}>${postingUnavailable ? 'Send attendance' : 'Simulate attendance (demo)'}</button></div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">🍎</div><h2>No roster loaded</h2><p>A J in a neighboring period suggests an absence. Review every mark. Names stay on this computer.</p></div>`}`;
     root.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigateView(button.dataset.go)));
     root.querySelector('#course-select')?.addEventListener('change', event => { state.course = event.target.value; });
     root.querySelector('#load-roster')?.addEventListener('click', async event => {
@@ -389,15 +446,6 @@
   const renderHistory = data => {
     const items = Array.isArray(data.items) ? data.items : [];
     root.innerHTML = `<div class="page-heading"><div><h1>History</h1><p>Recent activity recorded by the local runner.</p></div></div>${items.length ? `<div class="row-list">${items.map(item=>`<div class="list-row"><div><strong>${dateLabel(item.date)}</strong><small>${Object.entries(item.counts || {}).map(([key,value])=>`${safeText(key)}: ${safeText(value)}`).join(' · ') || 'No run details'}</small></div>${item.status ? `<span class="tag ${statusClass(item.status)}">${safeText(item.status)}</span>` : ''}</div>`).join('')}</div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">↺</div><h2>No history yet</h2><p>Completed local activity will be listed here.</p></div>`}`;
-  };
-  const renderSync = data => {
-    const items = Array.isArray(data.items) ? data.items : [];
-    root.innerHTML = `<div class="page-heading"><div><h1>Sync</h1><p>Check local sources and configuration status.</p></div><button id="sync-check" class="button primary">Check now</button></div><div class="content-panel"><div class="section-title-row flush-top"><h2>Source status</h2><span class="count-label">${data.checked_at ? `Checked ${safeText(data.checked_at)}` : 'Not checked this session'}</span></div><div class="data-list">${items.map(item=>`<div class="data-row"><div class="data-label">${safeText(item.label || 'Source')}</div><div class="data-value">${safeText(item.status || 'Unknown')} ${safeCode(item)}</div></div>`).join('') || '<div class="data-row"><div class="data-value muted">No source status available.</div></div>'}</div></div>`;
-    root.querySelector('#sync-check').addEventListener('click', async event => {
-      const button=event.currentTarget; buttonBusy(button,true,'Checking…');
-      try { const result=await request('/api/sync/check',{method:'POST',body:{}}); renderSync(result); showNotice('Local source check completed.','success'); }
-      catch(error){ showNotice(error.message,'error'); button.disabled=false; button.textContent='Check now'; }
-    });
   };
   const readinessCopy = item => {
     const code = String(item?.code || '');
@@ -456,17 +504,29 @@
   const safeStatusRow = item => {
     const [message, action, view] = readinessCopy(item);
     const status = statusPhrase(item);
-    return `<div class="data-row"><div><div class="data-label">${safeText(item.label || 'Requirement')} · ${safeText(status)}</div><p>${safeText(message)}</p><button type="button" class="text-action" data-go="${safeText(view)}">${safeText(action)}</button><details><summary>Details</summary><code>${safeText(item.code || 'status_unavailable')}</code></details></div><span class="tag ${status === 'Ready' || status.startsWith('Ordinary') ? 'good' : status === 'Needs attention' || status === 'Demo only' ? 'warn' : ''}">${safeText(status)}</span></div>`;
+    return `<div class="data-row"><div><div class="data-label">${safeText(item.label || 'Requirement')} · ${safeText(status)}</div><p>${safeText(message)}</p>${view === state.view ? '' : `<button type="button" class="text-action" data-go="${safeText(view)}">${safeText(action)}</button>`}<details><summary>Details</summary><code>${safeText(item.code || 'status_unavailable')}</code></details></div><span class="tag ${status === 'Ready' || status.startsWith('Ordinary') ? 'good' : status === 'Needs attention' || status === 'Demo only' ? 'warn' : ''}">${safeText(status)}</span></div>`;
   };
-  const renderReadiness = data => {
+  const renderReadiness = async data => {
     const items = Array.isArray(data.items) ? data.items : [];
-    root.innerHTML = `<div class="page-heading"><div><h1>Readiness</h1><p>Current local checks before a run. A ready checklist does not submit anything or turn on live mode.</p></div><span class="tag ${data.ready ? 'good' : 'warn'}">${data.ready ? 'Checks ready' : 'Review needed'}</span></div><div class="content-panel"><h2 class="panel-title">Requirements</h2><div class="data-list">${items.map(safeStatusRow).join('') || '<div class="data-row"><div class="data-value muted">No check details available. Refresh to check again.</div></div>'}</div></div>`;
+    let forms = state.forms;
+    try { const formsData = await request('/api/forms'); forms = Array.isArray(formsData.forms) ? formsData.forms : []; state.forms = forms; updateFormsNav(); } catch (_) { /* keep the last known list */ }
+    const changed = forms.filter(form => freshness(form).changed).length;
+    const formRows = forms.map(form => { const fresh = freshness(form); return `<div class="data-row"><div class="data-label row-title">${freshDot(form)}${safeText(form.name || 'Saved form')}</div><div class="data-value ${fresh.changed ? 'changed-text' : 'muted'}">${safeText(fresh.detail)}${fresh.changed ? ` <button type="button" class="text-action" data-open-form="${safeText(form.id)}">Open form</button>` : ''}</div></div>`; }).join('');
+    const checkedLabel = `Checked ${new Date().toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'})}`;
+    root.innerHTML = `<div class="page-heading"><div><h1>Readiness</h1><p>Current local checks before a run, and whether each saved form still matches its live version. A ready checklist does not submit anything or turn on live mode.</p></div><div class="heading-actions"><span class="tag ${data.ready ? 'good' : 'warn'}">${data.ready ? 'Checks ready' : 'Review needed'}</span><button id="readiness-check" class="button primary">Check now</button></div></div><div class="content-panel"><div class="section-title-row flush-top"><h2>Requirements</h2><span class="count-label">${safeText(checkedLabel)}</span></div><div class="data-list">${items.map(safeStatusRow).join('') || '<div class="data-row"><div class="data-value muted">No check details available. Refresh to check again.</div></div>'}</div></div><div class="content-panel"><div class="section-title-row flush-top"><h2>Forms</h2><span class="count-label">${changed ? `${changed} changed` : forms.length ? 'All up to date' : ''}</span></div><p class="helper-text">Each form is compared with its live version every time it runs, and when you refresh its questions.</p><div class="data-list">${formRows || '<div class="data-row"><div class="data-value muted">No saved forms yet.</div></div>'}</div></div>`;
     root.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigateView(button.dataset.go)));
+    root.querySelectorAll('[data-open-form]').forEach(button => button.addEventListener('click', () => { state.selectedId = button.dataset.openForm; navigateView('forms'); }));
+    root.querySelector('#readiness-check').addEventListener('click', async event => {
+      const button = event.currentTarget; buttonBusy(button, true, 'Checking…');
+      try { await renderReadiness(await request('/api/readiness')); showNotice('Local checks completed.', 'success'); }
+      catch (error) { showNotice(error.message, 'error'); button.disabled = false; button.textContent = 'Check now'; }
+    });
   };
   const renderSetup = async () => {
     const [formsData, readyData] = await Promise.all([request('/api/forms'), request('/api/readiness')]);
     const forms = Array.isArray(formsData.forms) ? formsData.forms : [];
     state.forms = forms;
+    updateFormsNav();
     if (!forms.some(form => form.id === state.selectedId)) state.selectedId = forms[0]?.id || null;
     const checks = Array.isArray(readyData.items) ? readyData.items : [];
     const find = label => checks.find(item => item.label === label) || {};
@@ -480,7 +540,7 @@
     const calendarMeta = summary.coverage_start && summary.coverage_end ? `Coverage ${safeText(summary.coverage_start)} to ${safeText(summary.coverage_end)} · ${safeText(summary.school_day_count ?? '—')} instructional days` : 'Coverage details are not available from this local check.';
     const step = (number, title, description, stateText, action, view, completed = false) => `<article class="content-panel"><p class="eyebrow">STEP ${number} · ${safeText(stateText)}</p><h2>${safeText(title)}</h2><p>${safeText(description)}</p><button class="button ${completed ? 'secondary' : 'primary'}" type="button" data-setup-action="${safeText(action)}" data-go="${safeText(view)}">${safeText(action)}</button></article>`;
     const signInStep = `<article class="content-panel"><p class="eyebrow">STEP 3 · NOT YET VERIFIED</p><h2>Sign in to your school account</h2><p>Open the dedicated Edge profile for a saved form, then sign in manually. Opening Edge is not proof of sign-in; FormFiller checks when the runner opens the form.</p>${forms.length && state.session.mode === 'private' ? `<label class="field-label" for="signin-form">Form to open</label><select id="signin-form" class="answer-select">${forms.map(form=>`<option value="${safeText(form.id)}">${safeText(form.name || 'Saved form')}</option>`).join('')}</select><button type="button" id="open-sign-in" class="button primary">Open dedicated Edge sign-in</button>` : !forms.length ? '<p>Add and save a form first. Sign-in remains unverified until the runner opens a form.</p><button type="button" class="button secondary" data-go="forms">Add your first form</button>' : '<p>Manual sign-in is available from the private local workspace. This synthetic demo cannot open a school sign-in session.</p>'}</article>`;
-    root.innerHTML = `<div class="page-heading"><div><h1>Setup</h1><p>Your progress is recalculated from the private workspace and current readiness checks. You can leave and return here anytime.</p></div><button class="button secondary" data-go="guide">Quick-start guide</button></div><div class="today-meta"><span><b>Forms</b> ${forms.length} configured</span><span><b>Reviewed</b> ${reviewedCount} of ${forms.length}</span><span><b>Calendar</b> ${calendarReady ? 'Validated' : 'Needs attention'}</span></div><div class="notice-box">Setup never submits a response. Only approved instructional dates permit a run, and the local runner tracks duplicates. Sign-in is checked when the runner opens a form.</div><div class="row-list">${step(1, 'Choose your private folder', 'Settings and saved responses live in this folder. Sign-in, locks, and submission tracking stay on this computer. The folder path is kept out of this screen.', workspaceReady ? 'Ready' : 'Needs attention', workspaceReady ? 'Folder selected' : 'Choose folder', 'setup', workspaceReady)}${step(2, 'Set up your school calendar', `A reviewed district calendar is required before Forms opens. ${calendarMeta} Missing, changed, stale, or uncovered dates remain blocked. Selecting a file does not approve it.`, calendarReady ? (calendar.code === 'non_school_day' ? 'Ready · today is a non-school day' : 'Ready') : 'Needs attention', 'Read calendar guide', 'guide', calendarReady)}${signInStep}${step(4, 'Add and review forms', 'Inspect each form, enter its template responses, save, then explicitly review the saved answers. Editing them requires another review.', forms.length === 0 ? 'Not started' : formReady ? 'Reviewed and ready' : `${reviewedCount} of ${forms.length} reviewed`, forms.length ? 'Open Forms' : 'Add your first form', forms.length ? 'forms' : 'forms', formReady)}${step(5, 'Review readiness', 'See current requirements and next actions. Live use requires a separate reviewed configuration action; completing this checklist never enables it.', readyData.ready ? 'Checks ready' : 'Needs attention', 'Review readiness', 'readiness', readyData.ready)}</div><div class="content-panel" id="setup-summary"><h2>Setup summary</h2><p>${forms.length} form${forms.length === 1 ? '' : 's'} configured; ${reviewedCount} reviewed. Calendar: ${calendarReady ? 'validated' : 'needs attention'}. Dedicated Edge sign-in: not yet verified. Live use: requires its separate reviewed configuration process.</p><button class="button primary" data-go="forms">Return to Forms</button></div>`;
+    root.innerHTML = `<div class="page-heading"><div><h1>Setup</h1><p>Your progress is recalculated from the private workspace and current readiness checks. You can leave and return here anytime.</p></div><button class="button secondary" data-go="guide">Teacher guide</button></div><div class="today-meta"><span><b>Forms</b> ${forms.length} configured</span><span><b>Reviewed</b> ${reviewedCount} of ${forms.length}</span><span><b>Calendar</b> ${calendarReady ? 'Validated' : 'Needs attention'}</span></div><div class="notice-box">Setup never submits a response. Only approved instructional dates permit a run, and the local runner tracks duplicates. Sign-in is checked when the runner opens a form.</div><div class="row-list">${step(1, 'Choose your private folder', 'Settings and saved responses live in this folder. Sign-in, locks, and submission tracking stay on this computer. The folder path is kept out of this screen.', workspaceReady ? 'Ready' : 'Needs attention', workspaceReady ? 'Folder selected' : 'Choose folder', 'setup', workspaceReady)}${step(2, 'Set up your school calendar', `A reviewed district calendar is required before Forms opens. ${calendarMeta} Missing, changed, stale, or uncovered dates remain blocked. Selecting a file does not approve it.`, calendarReady ? (calendar.code === 'non_school_day' ? 'Ready · today is a non-school day' : 'Ready') : 'Needs attention', 'Read calendar guide', 'guide', calendarReady)}${signInStep}${step(4, 'Add and review forms', 'Inspect each form, enter its template responses, save, then explicitly review the saved answers. Editing them requires another review.', forms.length === 0 ? 'Not started' : formReady ? 'Reviewed and ready' : `${reviewedCount} of ${forms.length} reviewed`, forms.length ? 'Open Forms' : 'Add your first form', forms.length ? 'forms' : 'forms', formReady)}${step(5, 'Review readiness', 'See current requirements and next actions. Live use requires a separate reviewed configuration action; completing this checklist never enables it.', readyData.ready ? 'Checks ready' : 'Needs attention', 'Review readiness', 'readiness', readyData.ready)}</div><div class="content-panel" id="setup-summary"><h2>Setup summary</h2><p>${forms.length} form${forms.length === 1 ? '' : 's'} configured; ${reviewedCount} reviewed. Calendar: ${calendarReady ? 'validated' : 'needs attention'}. Dedicated Edge sign-in: not yet verified. Live use: requires its separate reviewed configuration process.</p><button class="button primary" data-go="forms">Return to Forms</button></div>`;
     const calendarCoverage = summary.coverage_start && summary.coverage_end
       ? `Coverage ${summary.coverage_start} to ${summary.coverage_end} · ${summary.school_day_count ?? '—'} instructional days`
       : 'Coverage details are not available from this local check.';
@@ -521,7 +581,8 @@
     state.skyward = data;
     state.skywardCourses = Array.isArray(data.config?.courses) ? data.config.courses.map(course => ({id:course.id || '', name:course.name || '', period:course.period || ''})) : [];
     const editable = Boolean(data.editable) && data.mode !== 'demo';
-    root.innerHTML = `<div class="page-heading"><div><h1>Skyward settings</h1><p>Configure the district login URL and class identifiers. Sign-in stays manual in the dedicated Edge profile.</p></div><span class="tag ${editable ? 'good' : 'warn'}">${editable ? 'Editable' : 'Read only'}</span></div>${!editable ? `<div class="notice-box">Settings cannot be changed in ${safeText(data.mode || 'this')} mode. Any classes shown here are synthetic preview data.</div>` : ''}<div class="content-panel"><label class="field-label" for="skyward-login-url">District login URL <span class="required-mark">*</span></label><input id="skyward-login-url" type="url" required value="${safeText(data.config?.login_url || '')}" ${editable ? '' : 'disabled'} placeholder="https://district.example.edu"><p class="helper-text">Required. Use the URL supplied by your district. FormFiller cannot determine a class ID from this URL.</p><h2>Classes</h2><div id="skyward-course-list">${state.skywardCourses.map((course,index) => skywardCourseRow(course,index,editable)).join('') || '<p class="muted">No classes configured.</p>'}</div>${editable ? '<button type="button" class="button secondary" id="add-skyward-course">Add class</button><div class="editor-actions"><span id="skyward-save-status" class="editor-save-status" aria-live="polite"></span><button type="button" class="button primary" id="save-skyward">Save settings</button></div>' : ''}</div><div class="content-panel"><h2>Finding the class ID</h2><ol><li>Sign in to your district Skyward site manually in the dedicated Edge profile.</li><li>Open the class roster and its class details or roster settings.</li><li>Use the class identifier provided by the district page or administrator; enter the class name and optional period so you can recognize it here.</li><li>Do not guess an identifier from the login address. Ask your district administrator if it is not shown.</li></ol><figure class="notice-box"><figcaption>Fictional example · class details</figcaption><div aria-hidden="true">📖 Class: Algebra I　→　Period: 2　→　Class ID: 12345</div><p>This example is synthetic. Use the identifier shown by your district.</p></figure><p>Skyward is labeled Preview until reading and posting are verified. Review every attendance mark.</p></div>`;
+    root.innerHTML = `<div class="page-heading"><div><h1>Skyward settings</h1><p>Configure the district login URL and class identifiers. Sign-in stays manual in the dedicated Edge profile.</p></div><div class="heading-actions"><span class="tag ${editable ? 'good' : 'warn'}">${editable ? 'Editable' : 'Read only'}</span><button type="button" class="button secondary" data-go="attendance">Back to attendance</button></div></div>${!editable ? `<div class="notice-box">Settings cannot be changed in ${safeText(data.mode || 'this')} mode. Any classes shown here are synthetic preview data.</div>` : ''}<div class="content-panel"><label class="field-label" for="skyward-login-url">District login URL <span class="required-mark">*</span></label><input id="skyward-login-url" type="url" required value="${safeText(data.config?.login_url || '')}" ${editable ? '' : 'disabled'} placeholder="https://district.example.edu"><p class="helper-text">Required. Use the URL supplied by your district. FormFiller cannot determine a class ID from this URL.</p><h2>Classes</h2><div id="skyward-course-list">${state.skywardCourses.map((course,index) => skywardCourseRow(course,index,editable)).join('') || '<p class="muted">No classes configured.</p>'}</div>${editable ? '<button type="button" class="button secondary" id="add-skyward-course">Add class</button><div class="editor-actions"><span id="skyward-save-status" class="editor-save-status" aria-live="polite"></span><button type="button" class="button primary" id="save-skyward">Save settings</button></div>' : ''}</div><div class="content-panel"><h2>Finding the class ID</h2><ol><li>Sign in to your district Skyward site manually in the dedicated Edge profile.</li><li>Open the class roster and its class details or roster settings.</li><li>Use the class identifier provided by the district page or administrator; enter the class name and optional period so you can recognize it here.</li><li>Do not guess an identifier from the login address. Ask your district administrator if it is not shown.</li></ol><figure class="notice-box"><figcaption>Fictional example · class details</figcaption><div aria-hidden="true">📖 Class: Algebra I　→　Period: 2　→　Class ID: 12345</div><p>This example is synthetic. Use the identifier shown by your district.</p></figure><p>Skyward is labeled Preview until reading and posting are verified. Review every attendance mark.</p></div>`;
+    root.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => navigateView(button.dataset.go)));
     if (!editable) return;
     const collect = () => [...root.querySelectorAll('.skyward-course')].map(row => ({id:row.querySelector('[data-course-field="id"]').value.trim(),name:row.querySelector('[data-course-field="name"]').value.trim(),period:row.querySelector('[data-course-field="period"]').value.trim()}));
     root.querySelector('#add-skyward-course')?.addEventListener('click', () => { state.skywardCourses=collect(); state.skywardCourses.push({id:'',name:'',period:''}); root.querySelector('#skyward-course-list').innerHTML = state.skywardCourses.map((course,index)=>skywardCourseRow(course,index,true)).join(''); wireRemove(); });
@@ -554,7 +615,7 @@
       state.session = session;
       state.csrf = session.csrf_token || '';
       document.querySelector('#mode-badge').innerHTML = `<span class="local-dot"></span>${safeText(modeLabel(session.mode))}`;
-      if (session.needs_setup) renderWorkspaceSetup(); else { const data=await request('/api/forms'); state.forms=Array.isArray(data.forms)?data.forms:[]; state.selectedId=state.forms[0]?.id || null; if (!state.forms.length) navigateView('setup'); else renderForms(); }
+      if (session.needs_setup) renderWorkspaceSetup(); else { const data=await request('/api/forms'); state.forms=Array.isArray(data.forms)?data.forms:[]; state.selectedId=state.forms[0]?.id || null; updateFormsNav(); if (!state.forms.length) navigateView('setup'); else renderForms(); }
     } catch(error) {
       showNotice(error.message || 'The local FormFiller service could not be reached.','error');
       root.innerHTML='<div class="empty-state"><div class="empty-icon" aria-hidden="true">!</div><h2>Unable to load workspace</h2><p>Check that the local FormFiller service is running, then refresh.</p><button class="button secondary" id="try-again">Try again</button></div>';
