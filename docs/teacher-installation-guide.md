@@ -7,9 +7,10 @@ This guide is for teachers using the installed Windows application. Installation
 Use 64-bit Windows on an Intel or AMD computer. You do not need to install Python or PowerShell yourself: the agent prepares missing dependencies under your Windows account. First setup needs internet access. After setup, use the Launch FormFiller desktop shortcut; it opens the app without a terminal window.
 
 1. Ask an agent (Claude Code or Codex) to install FormFiller: point it at an empty folder named FormFiller, give it the GitHub link, and say "install this".
-2. On first launch, wait while setup downloads and installs missing dependencies, then choose a private folder when prompted. Existing Microsoft Edge is reused. If Edge is missing, Windows may request administrator approval to install it. If school policy blocks setup, ask IT to allow the downloads and installation; no manual commands are required in the normal setup flow.
-3. Keep that folder in the location selected by your school or district. Form settings and template responses are stored there. Browser sign-in and submission tracking stay on this computer.
-4. FormFiller opens in your browser and setup creates **Launch FormFiller** on your Desktop with a checklist icon. Double-click that shortcut for everyday use. Use **Setup** to continue the checklist or **Forms** to work with saved forms.
+2. Let the agent finish. It downloads anything missing, installs the app, adds **Launch FormFiller** to your Desktop, and opens FormFiller in your browser. Existing Microsoft Edge is reused; if Edge is missing, Windows may request administrator approval to install it. If school policy blocks a step, the agent tells you which one so IT can allow it. You do not run any commands yourself.
+3. When FormFiller opens, choose a private folder when prompted.
+4. Keep that folder in the location selected by your school or district. Form settings and template responses are stored there. Browser sign-in and submission tracking stay on this computer.
+5. For everyday use, double-click **Launch FormFiller** (the checklist icon) on your Desktop. You do not need the agent again unless you want to update or repair the installation. Use **Setup** to continue the checklist or **Forms** to work with saved forms.
 
 The installed application uses a reviewed local copy. The development preview is for synthetic examples and must not be used with school accounts or live form links.
 
