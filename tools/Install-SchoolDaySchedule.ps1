@@ -44,26 +44,14 @@ except BaseException as exc:
 $setupMode = if ($AllowUnconfigured) { 'allow_unconfigured' } else { 'configured' }
 & $python -c $validation $snapshotFull $setupMode
 if ($LASTEXITCODE -ne 0) { throw 'Schedule prerequisites failed.' }
-$existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($existing -and $existing.State -eq 'Running') { throw 'Wait until the existing task has finished.' }
-$account = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Limited
-# Start every day; only the approved calendar can establish a school day.
-# On a device in another zone, dispatch checks all day and the installed
-# launcher exits quietly outside the Central window. Never change the OS zone.
-$centralDevice = (Get-TimeZone).Id -eq 'Central Standard Time'
-$startHour = if ($centralDevice) { 12 } else { 0 }
-$durationMinutes = if ($centralDevice) { 210 } else { 1440 }
-$start = Get-Date -Hour $startHour -Minute 0 -Second 0
-$trigger = New-ScheduledTaskTrigger -Daily -At $start
-# A local wall-clock boundary follows daylight-saving transitions.
-$trigger.StartBoundary = $start.ToString("yyyy-MM-dd'T'HH:mm:ss")
-$repeat = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Minutes $durationMinutes)
-$trigger.Repetition = $repeat.Repetition
-$shell = if ($PowerShellPath) { $PowerShellPath } else { (Get-Process -Id $PID).Path }
-$action = New-ScheduledTaskAction -Execute $shell -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -File "{0}" -Scheduled -AppDataRoot "{1}"' -f $launcher, $env:LOCALAPPDATA) -WorkingDirectory $snapshotFull
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-if ($PSCmdlet.ShouldProcess($TaskName, 'Replace fixed batch time with noon–3:30 PM background dispatch')) {
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'FormFiller: randomized per-template school-day schedule, 12:00–15:30 Central; no automatic retries.' -Force | Out-Null
-    Write-Output 'status=schedule_installed window=12:00-15:30 timezone=America/Chicago'
+# One planner task runs each morning (and at sign-in, idempotently). It picks
+# each template's random time in 12:00-15:30 Central, deletes yesterday's plan
+# and leftover tasks, and registers one run-once task per slot. All launches use
+# pythonw.exe, so no console window appears. The old minute-by-minute task is
+# removed. TaskName is retained only for the -WhatIf message.
+if ($PSCmdlet.ShouldProcess($TaskName, 'Install the daily planner and remove the every-minute task')) {
+    Push-Location -LiteralPath $snapshotFull
+    try { & $python -B -m formfiller.taskplan install-planner } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw 'Planner registration failed.' }
+    Write-Output 'status=schedule_installed planner=daily window=12:00-15:30 timezone=America/Chicago'
 }

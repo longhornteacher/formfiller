@@ -25,7 +25,7 @@ from .runner import _config_fingerprint, _schema_fingerprint, _remember_submissi
 from .skyward import (MARKS, SkywardSession, demo_courses, demo_roster, load_config, staged_counts,
                       suggest_mark)
 from .state import StateError, StateStore
-from . import scheduling
+from . import scheduling, taskplan
 
 SAFE_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
 STATUSES = ("submitted", "failed", "uncertain", "submitting", "pending", "missing")
@@ -400,7 +400,14 @@ class WebApp:
             if payload["scheduled"] and (not isinstance(token, str) or not secrets.compare_digest(token, _config_fingerprint(form))):
                 raise WebError("review_changed_refresh_required", 409)
             self.store.update_form(form_id, {"scheduled": payload["scheduled"]})
+        self.sync_tasks()
         return self.form(form_id)
+
+    def sync_tasks(self):
+        """Refresh today's one-shot tasks after a schedule change; never blocks the edit."""
+        if self.mode != "private" or self.needs_setup:
+            return None
+        return taskplan.sync_for_ui(self.config_dir, self.state_dir)
 
     def mutate_form(self, payload, form_id=None):
         if self.needs_setup:
@@ -870,6 +877,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == "DELETE":
                 with app.editing():
                     app.store.archive_form(form_id)
+                app.sync_tasks()
                 return self.respond(200, {"removed": True})
         raise WebError("not_found", 404)
 

@@ -49,6 +49,27 @@ def plan(store, forms, instant):
     return data
 
 
+def prune(store):
+    """Delete every earlier day's timing; only today's plan is kept."""
+    if not store.root.is_dir():
+        return
+    for directory in store.root.iterdir():
+        if directory.is_dir() and directory.name != store.day and len(directory.name) == 10:
+            (directory / "schedule.json").unlink(missing_ok=True)
+
+
+def pending_minutes(store, forms, data):
+    """Distinct slot minutes of scheduled templates that still need dispatch."""
+    minutes = set()
+    for form in forms:
+        alias = form["alias"]
+        record = store.read(alias)
+        if (enabled(form) and alias not in data["claimed"] and alias in data["slots"]
+                and (record is None or record.get("status") == "pending")):
+            minutes.add(data["slots"][alias])
+    return sorted(minutes)
+
+
 def due(store, forms, instant):
     data = plan(store, forms, instant)
     minute = instant.hour * 60 + instant.minute

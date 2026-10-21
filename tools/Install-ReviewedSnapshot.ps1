@@ -35,6 +35,7 @@ $expectedFiles = @(
     'formfiller\runner.py',
     'formfiller\scheduling.py',
     'formfiller\schema_changes.py',
+    'formfiller\taskplan.py',
     'formfiller\state.py',
     'formfiller\store.py',
     'formfiller\workspace.py',

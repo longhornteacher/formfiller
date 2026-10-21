@@ -1,12 +1,12 @@
 # FormFiller: installation and first use
 
-This guide is for teachers using the installed Windows application. You do not need an AI account or an AI agent.
+This guide is for teachers using the installed Windows application. Installation is done by an AI agent (Claude Code or Codex); everyday use does not need one.
 
 ## Install and open FormFiller
 
-Use 64-bit Windows on an Intel or AMD computer. You do not need to install Python or PowerShell yourself: the launcher prepares missing dependencies under your Windows account. First setup needs internet access. After setup, use the Launch FormFiller desktop shortcut; it opens the app without a terminal window.
+Use 64-bit Windows on an Intel or AMD computer. You do not need to install Python or PowerShell yourself: the agent prepares missing dependencies under your Windows account. First setup needs internet access. After setup, use the Launch FormFiller desktop shortcut; it opens the app without a terminal window.
 
-1. Open `Install.bat` from the FormFiller folder, or ask an agent to install the GitHub repository into an empty folder.
+1. Ask an agent (Claude Code or Codex) to install FormFiller: point it at an empty folder named FormFiller, give it the GitHub link, and say "install this".
 2. On first launch, wait while setup downloads and installs missing dependencies, then choose a private folder when prompted. Existing Microsoft Edge is reused. If Edge is missing, Windows may request administrator approval to install it. If school policy blocks setup, ask IT to allow the downloads and installation; no manual commands are required in the normal setup flow.
 3. Keep that folder in the location selected by your school or district. Form settings and template responses are stored there. Browser sign-in and submission tracking stay on this computer.
 4. FormFiller opens in your browser and setup creates **Launch FormFiller** on your Desktop with a checklist icon. Double-click that shortcut for everyday use. Use **Setup** to continue the checklist or **Forms** to work with saved forms.
