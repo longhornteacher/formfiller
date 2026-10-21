@@ -252,6 +252,18 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(FakeBrowser.instances[0].submitted, [])
         self.assertEqual(StateStore(self.state_dir, self.today).read("F05")["status"], "failed")
 
+    def test_preflight_records_freshness_for_the_ui(self):
+        self._approve_all()
+        changes = self.state_dir / "changes"
+        changes.mkdir(parents=True)
+        (changes / "F01.json").write_text('{"code": "schema_options_updated"}', encoding="utf-8")
+        FakeBrowser.mismatch_alias = "F05"
+        self._run("--live")
+        checked = json.loads((self.state_dir / "checks" / "F01.json").read_text(encoding="utf-8"))
+        self.assertEqual(checked, {"checked_on": self.today.isoformat()})
+        self.assertFalse((changes / "F01.json").exists())  # matching again clears an old notice
+        self.assertEqual(json.loads((changes / "F05.json").read_text(encoding="utf-8"))["code"], "schema_review_required")
+
     def test_before_click_failure_is_the_only_state_resume_can_retry(self):
         self._approve_all()
         FakeBrowser.fail_before_click_alias = "F01"

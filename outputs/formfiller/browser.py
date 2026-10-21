@@ -17,6 +17,13 @@ SCHEMA_JS = r"""() => {
  }))}))};
 }"""
 
+# The title is display-only: it names a new template and is never part of the reviewed schema.
+TITLE_JS = r"""() => {
+ const norm = s => (s||'').replace(/\s+/g,' ').trim();
+ const heading = norm(document.querySelector('[data-automation-id="formTitle"]')?.textContent);
+ return heading || norm(document.title).replace(/\s*[-|]\s*Microsoft Forms$/i, '');
+}"""
+
 
 class BrowserError(Exception):
     def __init__(self, code: str, uncertain: bool = False):
@@ -151,6 +158,14 @@ class BrowserSession:
             raise
         except Exception:
             raise BrowserError('FORM_INSPECTION_FAILED') from None
+
+    def form_title(self, form):
+        """Best-effort title of an already inspected form; an empty string when unavailable."""
+        try:
+            title = self._open(form).evaluate(TITLE_JS)
+        except Exception:
+            return ''
+        return title[:120] if isinstance(title, str) else ''
 
     def _validate_schema(self, form):
         if self.inspect(form) != form.get('schema'):

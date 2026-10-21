@@ -34,6 +34,7 @@ $sourceNames = @(
     'run_and_check.py',
     'runner.py',
     'scheduling.py',
+    'taskplan.py',
     'schema_changes.py',
     'skyward.py',
     'state.py',

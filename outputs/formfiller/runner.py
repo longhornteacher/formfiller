@@ -181,6 +181,13 @@ def _save_observed_schema(config_dir: Path, alias: str, schema: Any) -> None:
             pass
 
 
+def _record_check(store: StateStore, alias: str, day: date, *, current: bool) -> None:
+    """Remember when the live form was last compared; a match clears an old change notice."""
+    _atomic_json(store.root / "checks" / f"{alias}.json", {"checked_on": day.isoformat()})
+    if current:
+        (store.root / "changes" / f"{alias}.json").unlink(missing_ok=True)
+
+
 def _finish_live(store: StateStore, aliases: list[str]) -> dict[str, int]:
     counts = store.summary(aliases)
     _log_summary(store, counts)
@@ -452,6 +459,7 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                             expected_schema_fp = _schema_fingerprint(form["schema"])
                             if not store.schema_approved(alias, expected_schema_fp, fingerprint):
                                 raise ValueError("schema_not_approved")
+                            _record_check(store, alias, today, current=observed_fp == expected_schema_fp)
                             if observed_fp != expected_schema_fp:
                                 _save_observed_schema(config_dir, alias, observed)
                                 try:
@@ -555,7 +563,15 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                     fingerprint = _config_fingerprint(form)
                     observed = session.inspect(form)
                     observed_fp = _schema_fingerprint(observed)
-                    if observed_fp != _schema_fingerprint(form["schema"]):
+                    current = observed_fp == _schema_fingerprint(form["schema"])
+                    _record_check(store, form["alias"], today, current=current)
+                    if not current:
+                        try:
+                            reconcile(form, observed, today)
+                            code = "schema_options_updated"
+                        except BrowserError:
+                            code = "schema_review_required"
+                        _atomic_json(store.root / "changes" / f"{form['alias']}.json", {"code": code})
                         _emit(f"preview alias={form['alias']} code=schema_mismatch")
                         return EXIT_CONFIG
                     _emit(f"preview alias={form['alias']} date={today.isoformat()} schema={fingerprint[:12]}")

@@ -75,6 +75,10 @@ def main() -> None:
                 assert page.locator(".summary-strip").count() == 0
                 assert page.locator(".form-list-row").count() == 4
                 assert page.locator("#choose-workspace").count() == 0
+                # Freshness: synthetic form 4 is seeded as changed on its live site.
+                assert page.locator(".form-list-row .fresh-dot.current").count() == 3
+                assert page.locator(".form-list-row .fresh-dot.changed").count() == 1
+                assert page.locator('.nav-item[data-view="forms"] .nav-alert').count() == 1
                 capture("forms")
 
                 page.locator('.nav-item[data-view="setup"]').click()
@@ -82,11 +86,14 @@ def main() -> None:
                 assert page.get_by_role("heading", name="Setup", exact=True).count() == 1
                 assert page.get_by_text("Setup never submits a response.").count() == 1
                 capture("setup")
-                page.locator('.nav-item[data-view="guide"]').click()
+                assert page.locator(".nav-item").count() == 6
+                page.get_by_role("button", name="Teacher guide", exact=True).click()
                 page.get_by_role("heading", name="Teacher Guide", exact=True).wait_for()
                 assert page.get_by_text("No AI account or agent is needed.").count() == 1
                 capture("guide")
-                page.locator('.nav-item[data-view="skyward"]').click()
+                assert page.locator('.nav-item[data-view="setup"]').get_attribute("class").split().count("active") == 1
+                page.locator('.nav-item[data-view="attendance"]').click()
+                page.get_by_role("button", name="Skyward settings", exact=True).click()
                 page.get_by_role("heading", name="Skyward settings", exact=True).wait_for()
                 assert page.get_by_role("heading", name="Skyward settings", exact=True).count() == 1
                 assert page.get_by_text("Read only").count() == 1
@@ -95,6 +102,9 @@ def main() -> None:
                 page.get_by_role("heading", name="Readiness", exact=True).wait_for()
                 assert page.get_by_text("Not yet verified").count() >= 1
                 assert page.get_by_role("button", name="Read sign-in guide").count() == 1
+                assert page.locator(".content-panel .fresh-dot.changed").count() == 1  # absorbed Sync view
+                page.get_by_role("button", name="Check now").click()
+                page.get_by_text("Local checks completed.").wait_for()
                 capture("readiness")
                 page.locator('.nav-item[data-view="forms"]').click()
                 page.get_by_role("heading", name="All your forms in one place!", exact=True).wait_for()
@@ -110,6 +120,10 @@ def main() -> None:
                 page.locator(".form-list-row").first.click()
                 assert not errors, "frontend raised a browser error before editing"
                 assert page.locator("#inline-answer-fields [data-answer]").count() == 2
+                assert page.locator(".flow-step.done").count() == 3  # saved, approved, scheduled
+                page.locator('#inline-answer-fields [data-answer="q0"]').fill("Unsaved synthetic edit")
+                assert page.locator(".flow-step.current").get_by_text("Save answers").count() == 1
+                page.locator('#inline-answer-fields [data-answer="q0"]').fill("Example answer")
                 capture("form-editor")
                 capture_path = os.environ.get("FORMFILLER_UI_CAPTURE_PATH")
                 if capture_path:
@@ -133,10 +147,15 @@ def main() -> None:
                 page.get_by_role("button", name="Inspect form").click()
                 page.locator("#dialog-notice").get_by_text("Paste a form URL to continue.").wait_for()
                 capture("form-details-error")
-                page.locator("#form-name").fill("Smoke added form")
                 page.locator("#form-url").fill("https://forms.office.com/Pages/ResponsePage.aspx?id=synthetic-smoke")
                 page.get_by_role("button", name="Inspect form").click()
                 page.locator("#answers-step").wait_for(state="visible")
+                assert page.locator("#form-name").input_value() == "Synthetic sample form"  # blank name takes the form title
+                page.get_by_role("button", name="Back").click()
+                page.locator("#form-name").fill("Smoke added form")
+                page.get_by_role("button", name="Inspect form").click()
+                page.locator("#answers-step").wait_for(state="visible")
+                assert page.locator("#form-name").input_value() == "Smoke added form"
                 capture("form-answers-dialog")
                 page.get_by_role("button", name="Save form").click()
                 page.locator('#dialog-notice').wait_for(state='visible')
@@ -167,9 +186,8 @@ def main() -> None:
                 page.locator("#reviewed-answers").check()
                 assert approve.is_enabled()
                 approve.click()
-                page.get_by_text("Saved answers approved for this form.").wait_for()
-
-                page.locator('.optional-schedule summary').click()
+                page.get_by_text("Saved answers approved. Submit it now or add it to the schedule.").wait_for()
+                assert page.locator('.optional-schedule').get_attribute('open') is not None
                 page.get_by_role("button", name="Add to schedule", exact=True).click()
                 page.get_by_text("Template added to the school-day schedule.").wait_for()
                 page.locator('.optional-schedule summary').click()
@@ -184,7 +202,7 @@ def main() -> None:
                 assert page.locator('#inline-answer-fields [data-answer="q0"]').input_value() == 'Updated synthetic answer'
                 assert page.locator('#inline-answer-fields [data-answer="q1"]').input_value() == 'Option A'
                 assert 'Pre-filled from last submission' in page.locator('.prefill-note').inner_text()
-                page.get_by_role("button", name="Refresh questions / URL").click()
+                page.get_by_role("button", name="Refresh questions").click()
                 page.get_by_role("button", name="Inspect form").click()
                 page.locator("#answers-step").wait_for(state="visible")
                 assert page.locator('#answer-fields [data-answer="q0"]').input_value() == "Updated synthetic answer"
@@ -213,9 +231,6 @@ def main() -> None:
                 page.locator('.nav-item[data-view="history"]').click()
                 page.get_by_role("heading", name="History", exact=True).wait_for()
                 capture("history")
-                page.locator('.nav-item[data-view="sync"]').click()
-                page.get_by_role("heading", name="Sync", exact=True).wait_for()
-                capture("sync")
 
                 page.set_viewport_size({"width": 390, "height": 844})
                 page.locator('.nav-item[data-view="readiness"]').click()

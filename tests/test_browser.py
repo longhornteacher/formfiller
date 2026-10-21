@@ -67,7 +67,8 @@ def fixture(form):
                 type_attr = '' if kind == 'combobox' else 'type="text"'
                 controls.append(f'<input {role} {type_attr} aria-label="{label}" placeholder="{placeholder}">')
         blocks.append(f'<div data-automation-id="questionItem"><span role="heading"><span class="text-format-content">{html.escape(question["title"])}</span>{required}</span>{"".join(controls)}</div>')
-    return '<html><body>'+''.join(blocks)+'''<button data-automation-id="submitButton" onclick="document.body.innerHTML='<p>Your response was submitted.</p>'">Submit</button></body></html>'''
+    title = html.escape(form.get('name', ''))
+    return f'<html><head><title>{title} - Microsoft Forms</title></head><body><div data-automation-id="formTitle"><span class="text-format-content">{title}</span></div>'+''.join(blocks)+'''<button data-automation-id="submitButton" onclick="document.body.innerHTML='<p>Your response was submitted.</p>'">Submit</button></body></html>'''
 
 
 class AnswerPlanTests(unittest.TestCase):
@@ -121,6 +122,12 @@ class BrowserFixtureTests(unittest.TestCase):
         self.session.preview(FORM, TODAY)
         self.session.verify(FORM, TODAY)
         self.assertEqual(self.external_requests, [])
+
+    def test_form_title_is_read_without_changing_the_schema(self):
+        self.assertEqual(self.session.form_title(FORM), 'Synthetic fixture')
+        self.assertEqual(self.session.inspect(FORM), FORM['schema'])
+        self.session.pages[FORM['alias']].evaluate("() => document.querySelector('[data-automation-id=formTitle]').remove()")
+        self.assertEqual(self.session.form_title(FORM), 'Synthetic fixture')  # falls back to the page title
 
     def test_local_browser_fixture_never_reads_private_forms_file(self):
         private_forms = (Path(__file__).resolve().parents[1] / 'outputs' / 'config' / 'forms.json').resolve()

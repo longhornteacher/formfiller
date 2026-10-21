@@ -50,6 +50,27 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/api/session', extra={'Host': 'example.invalid'})[0], 403)
         self.assertEqual(self.request('GET', '/api/session', extra={'Sec-Fetch-Site': 'cross-site'})[0], 403)
 
+    def test_freshness_reports_live_form_changes_and_clears_after_refresh(self):
+        _, data, _ = self.request('GET', '/api/forms')
+        by_id = {form['id']: form for form in data['forms']}
+        today = web.today().isoformat()
+        self.assertEqual(by_id['F01']['freshness'], {'state': 'current', 'checked_on': today})
+        self.assertEqual(by_id['F04']['freshness'], {'state': 'changed', 'checked_on': today})
+        _, status, _ = self.request('GET', '/api/today')
+        self.assertEqual({item['id']: item['freshness']['state'] for item in status['items']}['F04'], 'changed')
+
+        form = by_id['F04']
+        _, inspected, _ = self.request('POST', '/api/forms/inspect', {'url': form['url'], 'form_id': 'F04'})
+        self.assertEqual(inspected['title'], 'Synthetic sample form')
+        code, saved, _ = self.request('PUT', '/api/forms/F04', {'name': form['name'], 'url': form['url'],
+            'answers': inspected['answers'], 'inspect_token': inspected['inspect_token']})
+        self.assertEqual(code, 200)
+        self.assertEqual(saved['freshness'], {'state': 'current', 'checked_on': today})
+
+    def test_freshness_ignores_malformed_check_record(self):
+        (self.root / 'state' / 'checks' / 'F01.json').write_text('{"checked_on": "../x"}', encoding='utf-8')
+        self.assertIsNone(self.app.form('F01')['freshness']['checked_on'])
+
     def test_normalized_answers_preserve_original_plan(self):
         _, data, _ = self.request('GET', '/api/forms')
         form = data['forms'][0]

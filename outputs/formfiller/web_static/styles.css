@@ -15,6 +15,8 @@
   --brass: #ae873b;
   --line: #d9cfb8;
   --focus: #805b13;
+  --fresh: #2f8a4c;
+  --changed: #c0392b;
   --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-heading: Georgia, "Times New Roman", serif;
   font-family: var(--font-body);
@@ -271,7 +273,42 @@ input[type=checkbox] { width: 18px; height: 18px; margin: 2px 0 0; accent-color:
 .library-search .field-label { margin-top: 0; }
 .library-no-matches { padding: 0 12px 12px; color: var(--ink-soft); }
 .optional-schedule { margin-top: 24px; border-top: 2px dotted var(--line); padding-top: 16px; }
-.optional-schedule summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); }
+.optional-schedule summary { cursor: pointer; font-size: .92rem; font-weight: 700; color: var(--ink); }
 .optional-schedule summary .tag { margin-left: 12px; }
-.optional-schedule p { font-size: 12px; line-height: 1.7; color: var(--ink-soft); }
-.prefill-note { font-size: 11px; line-height: 1.6; color: var(--ink-soft); margin: 18px 0 10px; }
+.optional-schedule p { font-size: .9rem; line-height: 1.6; color: var(--ink-soft); max-width: 68ch; }
+.prefill-note { font-size: .85rem; line-height: 1.5; color: var(--ink-soft); margin: 18px 0 10px; }
+
+/* Form freshness: green when the saved questions match the live form, red when it changed. */
+.fresh-dot { display: inline-block; flex: none; width: 10px; height: 10px; margin-right: 8px; border-radius: 50%; vertical-align: .05em; background: var(--fresh); box-shadow: 0 0 0 2px rgba(47,138,76,.18); }
+.fresh-dot.changed { background: var(--changed); box-shadow: 0 0 0 2px rgba(192,57,43,.2); }
+.form-list-name { display: flex; align-items: center; }
+.form-list-row.changed { border-color: #d5aaa1; }
+.changed-text { color: var(--brick-dark); font-weight: 700; }
+.freshness-line { display: flex; align-items: center; margin: 6px 0 0; color: var(--ink-soft); font-size: .88rem; }
+.freshness-line.changed { color: var(--brick-dark); font-weight: 700; }
+.changed-box { color: #672b25; background: #f8e8e2; border-left: 5px solid var(--changed); }
+.changed-actions { margin-top: 10px; }
+.row-title { display: flex; align-items: center; }
+.nav-item { position: relative; }
+.nav-alert { width: 10px; height: 10px; margin-left: auto; border: 2px solid var(--paper); border-radius: 50%; background: var(--changed); }
+.editor-danger { display: flex; justify-content: flex-end; margin-top: 18px; }
+.content-panel + .content-panel { margin-top: 16px; }
+
+/* Save -> Review -> Run progress in the form editor */
+.flow-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 18px; padding: 0; list-style: none; }
+.flow-step button { display: flex; align-items: center; gap: 10px; width: 100%; height: 100%; padding: 9px 11px; color: var(--ink-soft); background: var(--paper); border: 1px solid var(--line); border-radius: 5px; text-align: left; cursor: pointer; }
+.flow-step button:hover { border-color: var(--walnut); }
+.flow-step i { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 50%; background: var(--paper-raised); font-style: normal; font-size: .85rem; font-weight: 700; }
+.flow-step b { display: block; color: var(--ink); font-size: .9rem; }
+.flow-step small { display: block; font-size: .8rem; }
+.flow-step.done i { color: #fff; background: var(--fresh); border-color: var(--fresh); }
+.flow-step.current button { background: #f5edda; border-color: var(--brass); box-shadow: inset 0 -3px var(--brass); }
+.flow-step.current i { color: #fff; background: var(--chalkboard); border-color: var(--chalkboard); }
+#step-save { margin-top: 20px; }
+#step-review .review-prompt { margin-top: 12px; }
+.run-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.run-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.run-head h3 { margin: 0 0 4px; font-size: 1.1rem; }
+.run-head p { margin: 0; color: var(--ink-soft); font-size: .9rem; }
+.run-section .optional-schedule { margin-top: 16px; }
+@media (max-width: 620px) { .flow-steps { grid-template-columns: minmax(0, 1fr); } }
