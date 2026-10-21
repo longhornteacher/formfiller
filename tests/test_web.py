@@ -67,6 +67,45 @@ class WebTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(saved['freshness'], {'state': 'current', 'checked_on': today})
 
+    def test_check_all_forms_reports_changes_without_touching_approvals(self):
+        code, data, _ = self.request('POST', '/api/forms/check', {})
+        self.assertEqual(code, 200)
+        states = {item['id']: item['state'] for item in data['results']}
+        self.assertEqual(states, {'F01': 'current', 'F02': 'current', 'F03': 'current', 'F04': 'changed'})
+        by_id = {form['id']: form for form in data['forms']}
+        self.assertEqual(by_id['F04']['change_code'], 'schema_options_updated')
+        self.assertFalse(any(form['review_required'] for form in data['forms']))
+        self.assertEqual(self.app.status()['counts']['submitted'], 0)
+
+    def test_check_all_forms_in_private_mode_stops_at_sign_in_and_never_revokes(self):
+        app = web.WebApp(self.root / 'config', self.root / 'state', self.root / 'profile', mode='private')
+        changed = {'questions': [{'title': 'Different question', 'required': True,
+                                  'controls': [{'kind': 'text', 'label': 'Different question', 'matrix': False}]}]}
+
+        class FakeSession:
+            opened = []
+            def __init__(self, settings): pass
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def inspect(self, form):
+                FakeSession.opened.append(form['alias'])
+                if form['alias'] == 'F01':
+                    return changed
+                if form['alias'] == 'F02':
+                    raise web.BrowserError('SIGN_IN_REQUIRED')
+                raise AssertionError('forms after a sign-in failure must not be opened')
+            def preview(self, *_): raise AssertionError('check must never fill a form')
+            def submit(self, *_): raise AssertionError('check must never submit')
+
+        with patch.object(web, 'BrowserSession', FakeSession):
+            result = app.check_forms()
+        self.assertEqual(FakeSession.opened, ['F01', 'F02'])
+        self.assertEqual([item['state'] for item in result['results']], ['changed', 'unavailable', 'not_checked', 'not_checked'])
+        self.assertEqual(result['results'][1]['code'], 'sign_in_required')
+        by_id = {form['id']: form for form in result['forms']}
+        self.assertEqual(by_id['F01']['change_code'], 'schema_review_required')
+        self.assertFalse(by_id['F01']['review_required'])  # the runner's preflight, not a check, revokes approval
+
     def test_freshness_ignores_malformed_check_record(self):
         (self.root / 'state' / 'checks' / 'F01.json').write_text('{"checked_on": "../x"}', encoding='utf-8')
         self.assertIsNone(self.app.form('F01')['freshness']['checked_on'])

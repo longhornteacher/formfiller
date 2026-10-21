@@ -312,3 +312,6 @@ input[type=checkbox] { width: 18px; height: 18px; margin: 2px 0 0; accent-color:
 .run-head p { margin: 0; color: var(--ink-soft); font-size: .9rem; }
 .run-section .optional-schedule { margin-top: 16px; }
 @media (max-width: 620px) { .flow-steps { grid-template-columns: minmax(0, 1fr); } }
+.check-summary { margin: -8px 0 14px; padding: 9px 12px; border: 1px solid var(--line); border-left: 4px solid var(--fresh); border-radius: 5px; background: #e7efe4; font-weight: 650; }
+.check-summary.changed { border-left-color: var(--changed); background: #f8e8e2; color: #672b25; }
+.check-summary.warn { border-left-color: var(--brass); background: #f5edda; }

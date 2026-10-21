@@ -12,7 +12,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,7 +21,8 @@ from zoneinfo import ZoneInfo
 
 from .browser import BrowserError, BrowserSession, answer_plan
 from .calendar import CalendarError, load_calendar
-from .runner import _config_fingerprint, _schema_fingerprint, _remember_submission
+from .runner import _config_fingerprint, _record_check, _schema_fingerprint, _remember_submission
+from .schema_changes import reconcile
 from .skyward import (MARKS, SkywardSession, demo_courses, demo_roster, load_config, staged_counts,
                       suggest_mark)
 from .state import StateError, StateStore, _atomic_json
@@ -126,6 +127,14 @@ def sample_schema():
         {"title": "Run date", "required": True,
          "controls": [{"kind": "combobox", "label": "Run date", "matrix": False}]},
     ]}
+
+
+def demo_observed(form):
+    """Synthetic live versions: form 4 gained a choice so the demo shows a detected change."""
+    schema = sample_schema()
+    if form["alias"] == "F04":
+        schema["questions"][1]["controls"].append({"kind": "radio", "label": "Option C", "matrix": False})
+    return schema
 
 
 def initialize_demo(config_dir, state_dir):
@@ -368,7 +377,8 @@ class WebApp:
         BrowserSession._validate_url(url)
         with self.editing():
             if self.mode == "demo":
-                schema, form_title = sample_schema(), "Synthetic sample form"
+                schema = demo_observed(self.store.get_form(payload["form_id"])) if payload.get("form_id") else sample_schema()
+                form_title = "Synthetic sample form"
             else:
                 self.calendar()  # Missing, changed, stale, or uncovered dates stop before Edge opens.
                 settings = self.settings()
@@ -412,6 +422,52 @@ class WebApp:
             self.store.update_form(form_id, {"scheduled": payload["scheduled"]})
         self.sync_tasks()
         return self.form(form_id)
+
+    def check_forms(self):
+        """Compare every saved form with its live version without filling or submitting.
+
+        Only the freshness records change. Approvals are left alone: the runner's own
+        preflight still decides whether a changed form may run.
+        """
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        results = []
+        with self.editing():
+            forms = [self.store.get_form(item["id"]) for item in self.store.list_forms()]
+            forms = [form for form in forms if form.get("url") and form.get("schema")]
+            state = StateStore(self.state_dir, today())
+            if self.mode == "demo" or not forms:
+                session = nullcontext()
+            else:
+                self.calendar()  # Missing, changed, stale, or uncovered dates stop before Edge opens.
+                settings = self.settings()
+                settings["browser_profile_path"] = str(self.profile_dir.resolve())
+                session = BrowserSession(settings)
+            with session as browser:
+                for index, form in enumerate(forms):
+                    try:
+                        observed = demo_observed(form) if self.mode == "demo" else browser.inspect(form)
+                    except BrowserError as exc:
+                        code = str(exc.code).lower()
+                        results.append({"id": form["id"], "state": "unavailable",
+                                        "code": code if SAFE_CODE.fullmatch(code) else "check_failed"})
+                        if code == "sign_in_required":
+                            # Every remaining form would wait on the same sign-in page.
+                            results += [{"id": rest["id"], "state": "not_checked", "code": "sign_in_required"}
+                                        for rest in forms[index + 1:]]
+                            break
+                        continue
+                    current = _schema_fingerprint(observed) == _schema_fingerprint(form["schema"])
+                    _record_check(state, form["alias"], today(), current=current)
+                    if not current:
+                        try:
+                            reconcile(form, observed, today())
+                            code = "schema_options_updated"
+                        except BrowserError:
+                            code = "schema_review_required"
+                        _atomic_json(state.root / "changes" / f'{form["alias"]}.json', {"code": code})
+                    results.append({"id": form["id"], "state": "current" if current else "changed"})
+        return {"results": results, "forms": self.forms()}
 
     def sync_tasks(self):
         """Refresh today's one-shot tasks after a schedule change; never blocks the edit."""
@@ -853,6 +909,8 @@ class Handler(BaseHTTPRequestHandler):
             raise WebError("request_invalid") from None
         if not isinstance(payload, dict):
             raise WebError("request_invalid")
+        if self.command == "POST" and path == "/api/forms/check":
+            return self.respond(200, app.check_forms())
         if self.command == "POST" and path == "/api/forms/inspect":
             return self.respond(200, app.inspect(payload))
         if self.command == "POST" and path == "/api/workspace/choose":
