@@ -21,7 +21,10 @@ def main(argv=None, *, root=ROOT):
     original_args = list(argv) if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check-only', action='store_true', help='Read status only; never open or submit forms.')
+    parser.add_argument('--scheduled', action='store_true', help='Process only due templates in the daily window.')
     args = parser.parse_args(argv)
+    if args.scheduled and args.check_only:
+        parser.error('--scheduled cannot be combined with --check-only')
     root = Path(root)
     if (root / '.migration.lock').exists():
         print('error code=migration_in_progress', flush=True)
@@ -69,11 +72,16 @@ def main(argv=None, *, root=ROOT):
     if not args.check_only:
         run_code = runner.run([
             '--live', '--config-dir', str(workspace.config_dir), '--state-dir', str(workspace.state_dir),
+            *(['--scheduled'] if args.scheduled else []),
         ], project_root=root)
         print(f'run_exit={run_code}', flush=True)
         if run_code == runner.EXIT_NOT_SCHOOL_DAY:
             print(f'{day}: status=skipped_non_school_day', flush=True)
             return 0
+        if args.scheduled:
+            # Future slots are intentionally pending. The final status check is
+            # available separately after the afternoon window.
+            return run_code
     # Force an immediate check for the run date, even before the scheduled due time.
     check_code = monitor.main([
         '--calendar', str(workspace.config_dir/'calendar.json'), '--forms', str(workspace.config_dir/'forms.json'),

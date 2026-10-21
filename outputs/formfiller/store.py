@@ -6,18 +6,28 @@ available only through get_form for local, authenticated application logic.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import tempfile
 import uuid
+from copy import deepcopy
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .state import _atomic_replace
+
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_ALLOWED = {"name", "url", "schema", "answers"}
+_ALLOWED = {"name", "url", "schema", "answers", "scheduled"}
 _FORM_HOSTS = {"forms.office.com", "forms.cloud.microsoft"}
+
+
+def template_fingerprint(form):
+    value = {key: form.get(key) for key in ("url", "schema", "answers")}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest()
 
 
 def _validate_schema(value: Any) -> None:
@@ -93,7 +103,7 @@ class FormStore:
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temp_name, self.path)
+            _atomic_replace(temp_name, self.path)
         finally:
             try:
                 os.unlink(temp_name)
@@ -154,10 +164,64 @@ class FormStore:
                 break
         forms.append({"id": form_id, "alias": form_id, "name": name.strip(),
                       "url": candidate_url or "", "schema": fields.get("schema"),
-                      "answers": fields.get("answers", []), "active": True})
+                      "answers": fields.get("answers", []), "active": True, "scheduled": False})
         document["forms"] = forms
         self._write(document)
         return {"id": form_id, "name": name.strip()}
+
+    @staticmethod
+    def submission_seed(form, *, exact_schema=True):
+        """Use confirmed answers unless the user has saved newer template edits.
+
+        Exact mode never displays a different answer policy from the approved
+        template. Schema refresh can map the last observed questions explicitly.
+        """
+        prior = form.get("last_submission")
+        if not isinstance(prior, dict):
+            return form, "saved_answers"
+        if prior.get("url") != form.get("url") or prior.get("template_fingerprint") != template_fingerprint(form):
+            return form, "saved_changes"
+        questions = (prior.get("schema") or {}).get("questions")
+        answers = prior.get("answers")
+        if (not isinstance(questions, list) or not isinstance(answers, list)
+                or len(questions) != len(answers) or any(not isinstance(a, dict) for a in answers)):
+            return form, "saved_answers"
+        if exact_schema:
+            def policy(rows):
+                return [{"kind": "date"} if row.get("kind") == "date" else row for row in rows]
+            if prior["schema"] != form.get("schema") or policy(answers) != policy(form.get("answers") or []):
+                return form, "saved_answers"
+        return prior, "last_submission"
+
+    def record_submission(self, form_id, submitted_form, submitted_on, fingerprint):
+        """Persist confirmed contents only, under the caller's shared runner lock.
+
+        This metadata cannot be set through form CRUD, never changes the approved
+        template, and never belongs in sanitized runtime state or logs.
+        """
+        day = date.fromisoformat(str(submitted_on))
+        _validate_schema(submitted_form.get("schema"))
+        _validate_answers(submitted_form.get("answers"))
+        document, forms = self._read()
+        for row in forms:
+            if self._identity(row) != form_id or row.get("active", True) is not True:
+                continue
+            if (submitted_form.get("alias") != form_id or row.get("url") != submitted_form.get("url")
+                    or template_fingerprint(row) != fingerprint):
+                raise FormStoreError("submission_template_changed")
+            prior = row.get("last_submission")
+            if isinstance(prior, dict) and prior.get("date", "") > day.isoformat():
+                raise FormStoreError("submission_date_older")
+            answers = deepcopy(submitted_form["answers"])
+            for answer in answers:
+                if answer.get("kind") == "date":
+                    answer["value"] = f"{day.month}/{day.day}/{day.year}"
+            row["last_submission"] = {"date": day.isoformat(), "url": submitted_form["url"],
+                "schema": deepcopy(submitted_form["schema"]), "answers": answers,
+                "template_fingerprint": fingerprint}
+            self._write(document)
+            return
+        raise FormStoreError("unknown_form")
 
     def update_form(self, form_id: str, changes: dict[str, Any]) -> dict[str, str]:
         if not isinstance(changes, dict) or set(changes) - _ALLOWED:
@@ -172,6 +236,10 @@ class FormStore:
                     if not isinstance(value, str) or not value.strip() or len(value.strip()) > 120:
                         raise FormStoreError("invalid_name")
                     updated[key] = value.strip()
+                elif key == "scheduled":
+                    if type(value) is not bool:
+                        raise FormStoreError("invalid_schedule")
+                    updated[key] = value
                 elif key == "url":
                     if value is not None and (not isinstance(value, str) or (value and not value.startswith("https://"))):
                         raise FormStoreError("invalid_url")

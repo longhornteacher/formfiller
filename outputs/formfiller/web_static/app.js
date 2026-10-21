@@ -5,7 +5,7 @@
   const dialog = document.querySelector('#form-dialog');
   const confirmDialog = document.querySelector('#confirm-dialog');
   const setupForm = document.querySelector('#form-setup');
-  const state = { course: '', csrf: '', view: 'forms', forms: [], selectedId: null, removeId: null, inspection: null, session: {}, skyward: null, skywardCourses: [] };
+  const state = { course: '', csrf: '', view: 'forms', forms: [], search: '', selectedId: null, removeId: null, inspection: null, session: {}, skyward: null, skywardCourses: [] };
   const viewNames = { forms: 'Forms', today: 'Today', attendance: 'Attendance Preview', history: 'History', sync: 'Sync', readiness: 'Readiness', setup: 'Setup', guide: 'Teacher Guide', skyward: 'Skyward' };
   const safeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const dateLabel = value => value ? safeText(value) : '—';
@@ -13,8 +13,10 @@
     notice.textContent = message;
     notice.className = `notice ${kind}`;
     notice.hidden = false;
+    const modalNotice = document.querySelector('#dialog-notice');
+    if (dialog.open && modalNotice) { modalNotice.textContent = message; modalNotice.className = `notice ${kind}`; modalNotice.hidden = false; }
   };
-  const clearNotice = () => { notice.hidden = true; notice.textContent = ''; };
+  const clearNotice = () => { notice.hidden = true; notice.textContent = ''; const modalNotice=document.querySelector('#dialog-notice'); if(modalNotice) { modalNotice.hidden=true; modalNotice.textContent=''; } };
   const request = async (path, options = {}) => {
     const method = options.method || 'GET';
     const headers = { 'Accept': 'application/json', ...(options.body ? {'Content-Type':'application/json'} : {}), ...(path !== '/api/session' ? {'X-FormFiller-Token': state.csrf} : {}), ...options.headers };
@@ -23,7 +25,21 @@
     try { data = await response.json(); } catch (_) { /* handled as a sanitized request failure */ }
     if (!response.ok) {
       const error = data?.error;
-      const requestError = new Error(error?.message || `Request failed (${response.status})`);
+      const messages = {
+        answers_invalid: 'Choose valid answers for the current questions. Required questions must be answered.',
+        required_answer_missing: 'Fill in every required question before saving.',
+        review_answers_before_scheduling: 'Save and review this template’s answers before adding it to the schedule.',
+        review_answers_before_submitting: 'Save and review your answers before submitting this form.',
+        already_submitted: 'This form has already been submitted today.',
+        manual_review_required: 'An earlier attempt needs review before this form can be submitted again.',
+        live_disabled: 'Live submission is not enabled. Check Readiness to finish setup.',
+        operation_in_progress: 'FormFiller is busy with a local operation. Try again when it finishes.',
+        field_type_unsupported: 'This question type needs additional support before the template can be saved.',
+        inspection_expired: 'The question import expired. Inspect the form again, then save.',
+        form_url_invalid: 'Enter a Microsoft Forms response URL.',
+        sign_in_required: 'Sign in manually in the dedicated Edge window, then inspect the form again.',
+      };
+      const requestError = new Error(messages[error?.code] || error?.message || `Request failed (${response.status})`);
       requestError.code = error?.code || '';
       requestError.status = response.status;
       throw requestError;
@@ -62,14 +78,23 @@
   const renderForms = () => {
     const forms = state.forms;
     const selected = forms.find(form => form.id === state.selectedId);
-    root.innerHTML = `<div class="page-heading"><div><h1>Forms</h1><p>Each form has its own template responses. Save them, then explicitly review them before use.</p></div><button class="button primary" id="add-form"><span aria-hidden="true">＋</span> Add form</button></div><div class="notice-box"><strong>First time?</strong> Add a form, inspect its questions, enter template responses, save, then review. These answers are reused each time this form runs. Date fields use the run date. <button class="text-action" id="forms-guide">Read the quick start</button></div>
-      ${forms.length ? `<div class="forms-workspace"><section class="form-list-panel" aria-label="Saved forms"><div class="list-heading"><h2>Saved forms</h2><span>${forms.length}</span></div><div class="compact-form-list">${forms.map(formListRow).join('')}</div></section><section class="editor-panel" aria-label="Form editor">${selected ? formEditor(selected) : ''}</section></div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">＋</div><h2>No forms saved yet</h2><p>Add a form to inspect its questions and prepare template responses for review.</p><button class="button primary" id="empty-add-form">Add form</button><button class="button secondary" id="open-setup">Continue setup</button></div>`}`;
+    root.innerHTML = `<div class="page-heading"><div><h1>All your forms in one place!</h1><p>Add your go-to forms, fill in your answers, and keep them ready for next time.</p></div><button class="button primary" id="add-form"><span aria-hidden="true">＋</span> Add form</button></div>
+      ${forms.length ? `<div class="forms-workspace"><section class="form-list-panel" aria-label="Saved forms"><div class="list-heading"><h2>Your forms</h2><span>${forms.length}</span></div><div class="library-search"><label class="field-label" for="find-form">Find a form</label><input id="find-form" type="search" placeholder="Search your forms…" value="${safeText(state.search)}"></div><div class="compact-form-list">${forms.map(formListRow).join('')}</div><p id="no-form-matches" class="library-no-matches" hidden>No matching forms.</p></section><section class="editor-panel" aria-label="Form editor">${selected ? formEditor(selected) : ''}</section></div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">＋</div><h2>Keep your go-to forms handy</h2><p>Paste a form link to add it, then fill in and save your answers.</p><button class="button primary" id="empty-add-form">Add form</button></div>`}`;
     root.querySelector('#add-form')?.addEventListener('click', () => openCreate());
     root.querySelector('#empty-add-form')?.addEventListener('click', () => openCreate());
     root.querySelector('#open-setup')?.addEventListener('click', () => navigateView('setup'));
     root.querySelector('#forms-guide')?.addEventListener('click', () => navigateView('guide'));
     root.querySelectorAll('[data-select-form]').forEach(button => button.addEventListener('click', () => { state.selectedId = button.dataset.selectForm; renderForms(); }));
     if (selected) renderAnswerFields(selected.schema || {questions:[]}, selected.answers || {}, '#inline-answer-fields');
+    if (selected) {
+      const source = document.createElement('p');
+      source.className = 'prefill-note';
+      source.textContent = selected.answer_source === 'last_submission'
+        ? `Pre-filled from last submission · ${selected.last_submitted_on}`
+        : selected.answer_source === 'saved_changes' && selected.last_submitted_on
+          ? `Your saved edits · Last submitted ${selected.last_submitted_on}` : 'Using your saved answers';
+      root.querySelector('#inline-answer-fields').before(source);
+    }
     root.querySelector('#save-inline-form')?.addEventListener('click', saveInlineForm);
     root.querySelector('#remove-inline-form')?.addEventListener('click', () => askRemove(selected.id));
     root.querySelector('#reviewed-answers')?.addEventListener('change', updateApprovalState);
@@ -77,27 +102,60 @@
     root.querySelector('#inline-answer-fields')?.addEventListener('change', updateApprovalState);
     root.querySelector('#editor-name')?.addEventListener('input', updateApprovalState);
     root.querySelector('#approve-answers')?.addEventListener('click', approveAnswers);
+    root.querySelector('#submit-form')?.addEventListener('click', submitForm);
+    const filterForms = () => {
+      let matches = 0;
+      root.querySelectorAll('[data-select-form]').forEach(row => {
+        row.hidden = !row.querySelector('.form-list-name').textContent.toLowerCase().includes(state.search.toLowerCase());
+        if (!row.hidden) matches += 1;
+      });
+      const empty = root.querySelector('#no-form-matches');
+      if (empty) empty.hidden = matches > 0;
+    };
+    root.querySelector('#find-form')?.addEventListener('input', event => { state.search=event.target.value; filterForms(); });
+    filterForms();
+    root.querySelector('#schedule-form')?.addEventListener('click', async event => {
+      if (editorIsDirty(selected)) { showNotice('Save your changes before updating the schedule.', 'info'); return; }
+      const button = event.currentTarget;
+      buttonBusy(button, true, 'Updating…');
+      try {
+        await request(`/api/forms/${encodeURIComponent(selected.id)}/schedule`, {method:'POST', body:{scheduled:!selected.scheduled, review_token:selected.review_token}});
+        showNotice(selected.scheduled ? 'Template paused.' : 'Template added to the school-day schedule.', 'success');
+        await loadForms();
+      } catch (error) { showNotice(error.message, 'error'); button.disabled=false; button.textContent=selected.scheduled ? 'Pause schedule' : 'Add to schedule'; }
+    });
+    root.querySelector('#refresh-template')?.addEventListener('click', () => {
+      if (editorIsDirty(selected)) { showNotice('Save your changes before refreshing the questions.', 'info'); return; }
+      openCreate(selected);
+    });
     updateApprovalState();
   };
   const formListRow = form => {
     const questions = normalizedQuestions(form.schema).length;
     const needsReview = Boolean(form.review_required);
-    return `<button class="form-list-row ${form.id === state.selectedId ? 'selected' : ''}" data-select-form="${safeText(form.id)}"><span class="form-list-name">${safeText(form.name || 'Untitled form')}</span><span class="form-list-sub">${questions} ${questions===1?'question':'questions'} · ${needsReview?'Saved — review needed':'Reviewed and ready'}</span></button>`;
+    const status = form.today_status === 'submitted' ? 'Submitted today' : needsReview ? 'Needs review' : form.can_submit ? 'Ready to fill' : 'Check required';
+    return `<button class="form-list-row ${form.id === state.selectedId ? 'selected' : ''}" data-select-form="${safeText(form.id)}"><span class="form-list-name">${safeText(form.name || 'Untitled form')}</span><span class="form-list-sub">${questions} ${questions===1?'question':'questions'} · ${status}${form.change_code?' · Form changed':''}</span></button>`;
   };
-  const openCreate = () => {
+  const openCreate = (form = null) => {
+    clearNotice();
     state.inspection = null;
+    state.editingId = form?.id || null;
     setupForm.reset();
-    document.querySelector('#dialog-title').textContent = 'Add a form';
+    document.querySelector('#dialog-title').textContent = form ? 'Refresh form template' : 'Add a form';
+    if (form) { document.querySelector('#form-name').value = form.name; document.querySelector('#form-url').value = form.url; }
     document.querySelector('#details-step').hidden = false;
     document.querySelector('#answers-step').hidden = true;
     updateSteps(1);
     document.querySelector('#inspect-button').disabled = false;
     dialog.showModal();
-    document.querySelector('#form-name').focus();
+    document.querySelector('#form-url').focus();
   };
   const formEditor = form => {
-    const review = form.review_required ? `<div class="review-prompt"><strong>Saved — review needed.</strong><p>Read each template response and confirm it is correct. Editing a response means it must be saved and reviewed again.</p><label><input id="reviewed-answers" type="checkbox"> I reviewed these saved template responses</label><button id="approve-answers" class="button secondary" disabled>Mark reviewed</button><span id="review-save-help" class="review-help" hidden>Save changes before reviewing these responses.</span>${form.review_token ? '' : '<span class="review-help">Current review approval is unavailable. Refresh the form before reviewing.</span>'}</div>` : `<div class="notice-box good">Reviewed and ready. These template responses belong to this form and will be reused each time it runs.</div>`;
-    return `<div class="editor-heading"><div><p class="eyebrow">FORM EDITOR</p><h2>${safeText(form.name || 'Untitled form')}</h2><p class="editor-subtitle">Template responses are saved for this form only. These answers are reused each time this form runs. Date fields use the run date.</p></div><button class="text-action remove" id="remove-inline-form">Remove form</button></div><div class="inline-name"><label for="editor-name">Form name</label><input id="editor-name" type="text" maxlength="120" value="${safeText(form.name || '')}"></div><div id="inline-answer-fields" class="answer-fields"></div>${review}<div class="editor-actions"><span class="editor-save-status" id="editor-save-status" aria-live="polite"></span><button id="save-inline-form" class="button primary">Save template responses</button></div>`;
+    const review = form.review_required ? `<div class="review-prompt"><strong>Review these saved answers before use.</strong><label><input id="reviewed-answers" type="checkbox"> I reviewed these saved answers</label><button id="approve-answers" class="button secondary" disabled>Approve saved answers</button><span id="review-save-help" class="review-help" hidden>Save changes before reviewing these answers.</span>${form.review_token ? '' : '<span class="review-help">Current review approval is unavailable. Refresh the form before approving.</span>'}</div>` : '';
+    const warning = form.change_code ? `<div class="notice-box" role="status"><strong>The form has changed.</strong> ${form.change_code === 'schema_options_updated' ? 'Available answers were kept; added options were left unselected and removed items were ignored.' : 'This template needs review before it can run again. Other templates can continue.'} Refresh the questions to review the latest version.</div>` : '';
+    return `<div class="editor-heading"><div><p class="eyebrow">YOUR FORM</p><h2>${safeText(form.name || 'Untitled form')}</h2><p class="editor-subtitle">Fill in your answers and save them for reuse. Submit when you're ready.</p></div><button class="text-action remove" id="remove-inline-form">Remove form</button></div>${warning}<div class="template-tools"><button class="button secondary" id="refresh-template">Refresh questions / URL</button></div><div class="inline-name"><label for="editor-name">Form name</label><input id="editor-name" type="text" maxlength="120" value="${safeText(form.name || '')}"></div><div id="inline-answer-fields" class="answer-fields"></div>${review}
+      <div class="editor-actions"><span class="editor-save-status" id="editor-save-status" aria-live="polite"></span><button id="save-inline-form" class="button secondary">Save changes</button><button id="submit-form" class="button primary" ${form.can_submit ? '' : 'disabled'}>${form.today_status === 'submitted' ? 'Submitted today' : 'Fill & submit'}</button></div>
+      <details class="optional-schedule"><summary>Scheduling (optional)<span class="tag">${form.scheduled ? 'On' : 'Off'}</span></summary><p>Automatically submit this saved form on school days, at a different time between 12:00 PM and 3:30 PM Central. Keep this computer awake and signed in; this window can be closed.</p><button class="button secondary" id="schedule-form" ${!form.scheduled && form.review_required ? 'disabled' : ''}>${form.scheduled ? 'Pause schedule' : 'Add to schedule'}</button></details>`;
   };
   const canonicalAnswer = value => Array.isArray(value) ? [...value].sort() : (value ?? '');
   const editorIsDirty = form => {
@@ -110,6 +168,8 @@
   };
   const updateApprovalState = () => {
     const form = state.forms.find(item => item.id === state.selectedId);
+    const submitButton = document.querySelector('#submit-form');
+    if (form && submitButton) submitButton.disabled = !form.can_submit || editorIsDirty(form);
     const checkbox = document.querySelector('#reviewed-answers');
     const button = document.querySelector('#approve-answers');
     if (!form?.review_required || !checkbox || !button) return;
@@ -119,6 +179,20 @@
     button.disabled = dirty || !checkbox.checked || !form.review_token;
     const help = document.querySelector('#review-save-help');
     if (help) help.hidden = !dirty;
+  };
+  const submitForm = async event => {
+    const form = state.forms.find(item => item.id === state.selectedId);
+    if (!form?.can_submit || editorIsDirty(form)) return;
+    const button = event.currentTarget;
+    buttonBusy(button, true, 'Submitting…');
+    try {
+      const result = await request(`/api/forms/${encodeURIComponent(form.id)}/submit`, {method:'POST', body:{}});
+      showNotice(result.mode === 'demo' ? 'Form submitted in the demo.' : 'Form submitted.', 'success');
+      await loadForms();
+    } catch (error) {
+      showNotice(error.message, 'error');
+      try { await loadForms(); } catch (_) { button.disabled=false; button.textContent='Fill & submit'; }
+    }
   };
   const approveAnswers = async event => {
     const button = event.currentTarget;
@@ -147,13 +221,13 @@
     try {
       await request(`/api/forms/${encodeURIComponent(form.id)}`, {method:'PUT', body:{name:document.querySelector('#editor-name').value.trim() || form.name, url:form.url, answers:collectAnswers('#inline-answer-fields')}});
       document.querySelector('#editor-save-status').textContent = 'Saved locally';
-      showNotice('Template responses saved — review needed.', 'success');
+      showNotice('Form answers saved.', 'success');
       await loadForms();
     } catch (error) {
       const guidance = readinessCopy({code:error.code});
       showNotice(error.code && error.code !== 'request_failed' ? guidance[0] : 'The form could not be inspected. Check the URL and local readiness, then try again.', 'error');
     }
-    finally { button.disabled = false; button.textContent = 'Save template responses'; }
+    finally { button.disabled = false; button.textContent = 'Save changes'; }
   };
   const updateSteps = current => document.querySelectorAll('.step').forEach(step => { const n = Number(step.dataset.step); step.classList.toggle('current', n === current); step.classList.toggle('done', n < current); });
   const closeDialog = () => { dialog.close(); document.querySelector('#form-name').readOnly = false; document.querySelector('#form-url').readOnly = false; document.querySelector('#back-button').hidden = false; document.querySelector('#save-form-button').textContent = 'Save form'; };
@@ -161,19 +235,19 @@
   document.querySelector('#inspect-button').addEventListener('click', async event => {
     clearNotice();
     const button = event.currentTarget;
-    const name = document.querySelector('#form-name').value.trim();
+    const name = document.querySelector('#form-name').value.trim() || 'New form template';
     const url = document.querySelector('#form-url').value.trim();
-    if (!name || !url) { showNotice('Enter a form name and URL to continue.', 'error'); return; }
+    if (!url) { showNotice('Paste a form URL to continue.', 'error'); return; }
     buttonBusy(button, true, 'Inspecting…');
     try {
-      const result = await request('/api/forms/inspect', {method:'POST', body:{name,url}});
-      state.inspection = {...result, name, url, answers:{}};
+      const result = await request('/api/forms/inspect', {method:'POST', body:{name,url, form_id:state.editingId}});
+      state.inspection = {...result, name, url};
       document.querySelector('#details-step').hidden = true;
       document.querySelector('#answers-step').hidden = false;
       document.querySelector('#dialog-title').textContent = 'Configure answers';
       document.querySelector('#inspection-summary').textContent = `${Array.isArray(result.schema?.questions) ? result.schema.questions.length : 0} question(s) found. Enter template responses, save, then review them. Unsupported question types are left unresolved and cannot pass schema approval.`;
       document.querySelector('#save-form-button').textContent = 'Save form';
-      renderAnswerFields(result.schema || {questions:[]}, {});
+      renderAnswerFields(result.schema || {questions:[]}, result.answers || {});
       updateSteps(2);
     } catch (error) {
       const guidance = readinessCopy({code:error.code});
@@ -243,9 +317,11 @@
     const answers = collectAnswers('#answer-fields');
     const name = document.querySelector('#form-name').value.trim() || state.inspection.name;
     try {
-      await request('/api/forms', {method:'POST', body:{name, url:state.inspection.url, schema:state.inspection.schema, answers, inspect_token:state.inspection.inspect_token}});
+      const target = state.editingId ? `/api/forms/${encodeURIComponent(state.editingId)}` : '/api/forms';
+      const saved = await request(target, {method:state.editingId?'PUT':'POST', body:{name, url:state.inspection.url, schema:state.inspection.schema, answers, inspect_token:state.inspection.inspect_token}});
+      state.selectedId = saved.id;
       closeDialog();
-      showNotice('Template responses saved — review needed.', 'success');
+      showNotice('Form answers saved.', 'success');
       await loadForms();
     } catch (error) { showNotice(error.message, 'error'); }
     finally { button.disabled = false; button.textContent = 'Save form'; }
@@ -260,9 +336,17 @@
   });
   const statusClass = status => /ready|ok|pass|success|complete|synced|submitted/i.test(String(status)) ? 'good' : /fail|blocked|error|missing|review|stale|uncertain/i.test(String(status)) ? 'warn' : '';
   const safeCode = item => item.code ? `<span class="tag">${safeText(item.code)}</span>` : '';
+  const scheduledLabel = item => {
+    if (!item.scheduled) return 'Template only';
+    if (item.review_required) return 'Needs review';
+    if (item.schedule_claimed && item.status === 'pending') return 'Attempt interrupted · review required';
+    if (!item.scheduled_time) return 'Next available school day';
+    const [hour, minute] = item.scheduled_time.split(':').map(Number);
+    return `${hour > 12 ? hour - 12 : hour}:${String(minute).padStart(2,'0')} PM Central`;
+  };
   const renderToday = data => {
     const items = Array.isArray(data.items) ? data.items : [];
-    root.innerHTML = `<div class="page-heading"><div><h1>Today</h1><p>Scheduled activity and current form status for ${dateLabel(data.date)}.</p><p class="today-mode">${safeText(modeLabel(data.mode || state.session.mode))}</p></div><button id="run-today" class="button primary" ${data.can_run === false ? 'disabled' : ''}>Run today's forms</button></div><div class="today-run-note" id="today-run-note" ${data.can_run === false ? '' : 'hidden'}>A run is unavailable until local readiness checks allow it.</div><div class="today-meta"><span><b>Date</b> ${dateLabel(data.date)}</span><span><b>Forms</b> ${items.length}</span></div><div class="section-title-row"><h2>Today's forms</h2></div>${items.length ? `<div class="row-list">${items.map(item=>`<div class="list-row"><div><strong>${safeText(item.name || 'Form')}</strong></div><span class="tag ${statusClass(item.status)}">${safeText(item.status || 'Pending')}</span></div>`).join('')}</div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">◷</div><h2>No activity today</h2><p>The local runner and calendar status will appear here when available.</p></div>`}`;
+    root.innerHTML = `<div class="page-heading"><div><h1>Today</h1><p>School-day schedule · 12:00 PM–3:30 PM Central · ${dateLabel(data.date)}</p><p class="today-mode">${safeText(modeLabel(data.mode || state.session.mode))}</p></div><button id="run-today" class="button primary" ${data.can_run === false ? 'disabled' : ''}>Run today's forms</button></div><div class="notice-box">Times are chosen automatically each day. “Run today's forms” runs the scheduled templates immediately.${data.schedule_code ? ` Schedule status: ${safeText(data.schedule_code.replaceAll('_',' '))}.` : ''}</div><div class="today-run-note" id="today-run-note" ${data.can_run === false ? '' : 'hidden'}>A run is unavailable until local readiness checks allow it.</div><div class="today-meta"><span><b>Date</b> ${dateLabel(data.date)}</span><span><b>Forms</b> ${items.length}</span></div><div class="section-title-row"><h2>Today's forms</h2></div>${items.length ? `<div class="row-list">${items.map(item=>`<div class="list-row"><div><strong>${safeText(item.name || 'Form')}</strong><span class="schedule-time">${safeText(scheduledLabel(item))}</span></div><span class="tag ${statusClass(item.status)}">${safeText(item.status || 'Pending')}</span></div>`).join('')}</div>` : `<div class="empty-state"><div class="empty-icon" aria-hidden="true">◷</div><h2>No activity today</h2><p>Add a saved template to the schedule to see it here.</p></div>`}`;
     root.querySelector('#run-today').addEventListener('click', async event => {
       const button = event.currentTarget;
       clearNotice(); buttonBusy(button, true, 'Starting…');

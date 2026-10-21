@@ -27,7 +27,7 @@ class BootstrapTests(unittest.TestCase):
             ". '" + str(BOOTSTRAP).replace("'", "''") + "'\n"
             "$dependencyRoot = Join-Path $PSScriptRoot 'dependencies with spaces'\n" + body,
             encoding='utf-8-sig')
-        result = subprocess.run([self.shell, '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        result = subprocess.run([self.shell, '-NoProfile',
                                  '-File', str(script)], capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
@@ -89,6 +89,16 @@ function Receive-VerifiedDependency { throw 'unexpected download' }
 Resolve-FormFillerPython $dependencyRoot
 """)
         self.assertIn('Python313', result)
+
+    def test_no_install_reports_missing_dependency_without_downloading(self):
+        result = self.run_script("""
+function Test-FormFillerPython { param($Executable) return $false }
+function Get-Command { param($Name,$ErrorAction) return $null }
+function Receive-VerifiedDependency { throw 'unexpected download' }
+try { Resolve-FormFillerPython $dependencyRoot -NoInstall; throw 'accepted missing dependency' }
+catch { if ($_.Exception.Message -ne 'python_311_required') { throw }; Write-Output 'BLOCKED' }
+""")
+        self.assertIn('BLOCKED', result)
 
     def test_missing_python_installs_per_user_and_validates(self):
         result = self.run_script("""

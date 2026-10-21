@@ -46,6 +46,19 @@ class RunAndCheckTests(unittest.TestCase):
         self.assertEqual(code,1)
         self.assertEqual(len(runs),1)
 
+    def test_scheduled_dispatch_does_not_report_future_slots_as_missing(self):
+        code,runs,checks=self.invoke(args=['--scheduled'],monitor_code=1)
+        self.assertEqual(code,0)
+        self.assertEqual(len(runs),1)
+        self.assertIn('--scheduled',runs[0].args[0])
+        self.assertEqual(checks,[])
+
+    def test_scheduled_failure_is_preserved_without_retry(self):
+        code,runs,checks=self.invoke(args=['--scheduled'],runner_code=4)
+        self.assertEqual(code,4)
+        self.assertEqual(len(runs),1)
+        self.assertEqual(checks,[])
+
     def test_migration_gate_prevents_source_forwarding(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)

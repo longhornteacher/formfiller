@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import date
 from pathlib import Path
 
 from outputs.formfiller.state import StateError, StateStore
+from outputs.formfiller import state
 
 
 class StateStoreTests(unittest.TestCase):
@@ -52,6 +54,30 @@ class StateStoreTests(unittest.TestCase):
         self.store.record_schema("F04", schema, approved=True, config_fingerprint=config)
         self.assertTrue(self.store.schema_approved("F04", schema, config))
         self.assertFalse(self.store.schema_approved("F04", schema, "0" * 64))
+
+    def test_transient_windows_sharing_violation_retries_only_atomic_replace(self):
+        error = PermissionError('synthetic sharing violation')
+        error.winerror = 32
+        with patch.object(state.os, 'name', 'nt'), patch.object(state.os, 'replace', side_effect=[error, None]) as replace, patch.object(state.time, 'sleep') as sleep:
+            state._atomic_replace('synthetic-temp', 'synthetic-target')
+        self.assertEqual(replace.call_count, 2)
+        self.assertEqual(replace.call_args_list[0], replace.call_args_list[1])
+        sleep.assert_called_once_with(0.02)
+
+    def test_persistent_windows_sharing_violation_stops_after_bounded_attempts(self):
+        error = PermissionError('synthetic access denied')
+        error.winerror = 5
+        with patch.object(state.os, 'name', 'nt'), patch.object(state.os, 'replace', side_effect=error) as replace, patch.object(state.time, 'sleep'):
+            with self.assertRaises(PermissionError):
+                state._atomic_replace('synthetic-temp', 'synthetic-target')
+        self.assertEqual(replace.call_count, 5)
+
+    def test_other_filesystem_errors_are_not_retried(self):
+        with patch.object(state.os, 'replace', side_effect=FileNotFoundError('synthetic missing path')) as replace, patch.object(state.time, 'sleep') as sleep:
+            with self.assertRaises(FileNotFoundError):
+                state._atomic_replace('synthetic-temp', 'synthetic-target')
+        replace.assert_called_once()
+        sleep.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -41,10 +41,11 @@
   <dialog id="form-dialog" class="modal">
     <form id="form-setup" method="dialog" novalidate>
       <div class="modal-head"><div><p class="eyebrow">FORM SETUP</p><h2 id="dialog-title">Add a form</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Close">×</button></div>
+      <div id="dialog-notice" class="notice" role="status" aria-live="polite" hidden></div>
       <div class="setup-steps" aria-label="Setup steps"><span class="step current" data-step="1"><i>1</i>Details</span><span class="step-line"></span><span class="step" data-step="2"><i>2</i>Answers</span></div>
       <div id="details-step" class="dialog-step">
-        <label class="field-label" for="form-name">Form name</label><input id="form-name" name="name" autocomplete="off" required maxlength="120" placeholder="For example, Daily check-in">
         <label class="field-label" for="form-url">Form URL</label><input id="form-url" name="url" type="url" autocomplete="url" required placeholder="https://…">
+        <label class="field-label" for="form-name">Form name (optional)</label><input id="form-name" name="name" autocomplete="off" maxlength="120" placeholder="For example, Daily check-in">
         <p class="helper-text">The form is inspected locally to identify its questions. Answers are saved for review before use.</p>
         <div class="dialog-actions"><button type="button" class="button secondary" data-close-dialog>Cancel</button><button type="button" class="button primary" id="inspect-button">Inspect form <span aria-hidden="true">→</span></button></div>
       </div>

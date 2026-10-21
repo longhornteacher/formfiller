@@ -30,7 +30,7 @@ function Test-FormFillerPython([string]$Executable) {
     return ($LASTEXITCODE -eq 0)
 }
 
-function Resolve-FormFillerPython([string]$DependencyRoot) {
+function Resolve-FormFillerPython([string]$DependencyRoot, [switch]$NoInstall) {
     $pythonRoot = Join-Path $DependencyRoot 'Python313'
     $python = Join-Path $pythonRoot 'python.exe'
     if (Test-FormFillerPython $python) { return $python }
@@ -44,6 +44,7 @@ function Resolve-FormFillerPython([string]$DependencyRoot) {
         $candidate = & $py.Source -3 -c 'import sys; print(sys.executable)' 2>$null
         if ($LASTEXITCODE -eq 0 -and $candidate -and (Test-FormFillerPython ([string]$candidate))) { return [string]$candidate }
     }
+    if ($NoInstall) { throw 'python_311_required' }
     New-Item -ItemType Directory -Path $DependencyRoot -Force | Out-Null
     $installer = Join-Path $DependencyRoot 'python-3.13.16-amd64.exe'
     Write-Host 'Downloading Python for FormFiller...'
@@ -56,15 +57,16 @@ function Resolve-FormFillerPython([string]$DependencyRoot) {
     return $python
 }
 
-function Resolve-FormFillerPowerShell([string]$DependencyRoot) {
-    $command = Get-Command pwsh.exe -ErrorAction SilentlyContinue
-    if ($command) {
+function Resolve-FormFillerPowerShell([string]$DependencyRoot, [switch]$NoInstall) {
+    foreach ($command in @(Get-Command pwsh.exe -All -ErrorAction SilentlyContinue)) {
+        if (-not $command -or $command.Source -match '\\(\.codex|\.cache|codex-runtimes|plugins)\\') { continue }
         & $command.Source -NoProfile -Command 'if ($PSVersionTable.PSVersion.Major -ge 7) { exit 0 }; exit 1' *> $null
         if ($LASTEXITCODE -eq 0) { return $command.Source }
     }
     $destination = Join-Path $DependencyRoot 'PowerShell-7.6.6'
     $executable = Join-Path $destination 'pwsh.exe'
     if (-not (Test-Path -LiteralPath $destination)) {
+        if ($NoInstall) { throw 'powershell_7_required' }
         New-Item -ItemType Directory -Path $DependencyRoot -Force | Out-Null
         $archive = Join-Path $DependencyRoot 'PowerShell-7.6.6-win-x64.zip'
         Write-Host 'Downloading PowerShell for FormFiller...'
@@ -91,8 +93,9 @@ function Test-FormFillerEdge {
     return $false
 }
 
-function Install-FormFillerEdge {
+function Install-FormFillerEdge([switch]$NoInstall) {
     if (Test-FormFillerEdge) { return }
+    if ($NoInstall) { throw 'edge_required' }
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) { throw 'edge_install_requires_it' }
     Write-Host 'Installing Microsoft Edge. Windows may request administrator approval...'
@@ -109,7 +112,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         $dependencyRoot = Join-Path $AppDataRoot 'FormFiller\Dependencies'
         $shell = Resolve-FormFillerPowerShell $dependencyRoot
         Install-FormFillerEdge
-        & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bootstrapScriptRoot 'Launch-WebUI.ps1') -RepositoryRoot $RepositoryRoot -AppDataRoot $AppDataRoot
+        & $shell -NoProfile -File (Join-Path $bootstrapScriptRoot 'Launch-WebUI.ps1') -RepositoryRoot $RepositoryRoot -AppDataRoot $AppDataRoot
         exit $LASTEXITCODE
     } catch {
         # Never echo exception text, which can contain private paths.

@@ -94,6 +94,16 @@ New-Item -ItemType Directory -Path $Destination -Force | Out-Null
         self.assertEqual(result.returncode, 2)
         self.assertFalse((self.app / 'App').exists())
 
+    def test_unfinished_first_use_reuses_installed_snapshot(self):
+        installed = self.root / 'unfinished installed'
+        installed.mkdir()
+        (installed / 'Run-FormFillerPrivate.ps1').write_text(STUB_UI)
+        (self.app / 'installation.json').write_text(json.dumps({'version': 1, 'installed_app': str(installed)}))
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((installed / 'launched.json').exists())
+        self.assertFalse((self.app / 'App').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

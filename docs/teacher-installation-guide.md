@@ -4,12 +4,12 @@ This guide is for teachers using the installed Windows application. You do not n
 
 ## Install and open FormFiller
 
-Use 64-bit Windows on an Intel or AMD computer. You do not need to install Python or PowerShell yourself: the launcher prepares missing dependencies under your Windows account. First setup needs internet access. Keep the launcher window open while you use the application.
+Use 64-bit Windows on an Intel or AMD computer. You do not need to install Python or PowerShell yourself: the launcher prepares missing dependencies under your Windows account. First setup needs internet access. After setup, use the Launch FormFiller desktop shortcut; it opens the app without a terminal window.
 
-1. Open `LaunchWebUI.bat` from the FormFiller folder.
+1. Open `Install.bat` from the FormFiller folder, or ask an agent to install the GitHub repository into an empty folder.
 2. On first launch, wait while setup downloads and installs missing dependencies, then choose a private folder when prompted. Existing Microsoft Edge is reused. If Edge is missing, Windows may request administrator approval to install it. If school policy blocks setup, ask IT to allow the downloads and installation; no manual commands are required in the normal setup flow.
 3. Keep that folder in the location selected by your school or district. Form settings and template responses are stored there. Browser sign-in and submission tracking stay on this computer.
-4. FormFiller opens in your browser. Use **Setup** to continue the checklist or **Forms** to work with saved forms.
+4. FormFiller opens in your browser and setup creates **Launch FormFiller** on your Desktop with a checklist icon. Double-click that shortcut for everyday use. Use **Setup** to continue the checklist or **Forms** to work with saved forms.
 
 The installed application uses a reviewed local copy. The development preview is for synthetic examples and must not be used with school accounts or live form links.
 
@@ -19,7 +19,8 @@ The installed application uses a reviewed local copy. The development preview is
 2. Choose **Inspect form**. Inspection uses the dedicated local browser profile. The district calendar must pass its current check before FormFiller opens a form for inspection.
 3. Enter the template responses for this form. Each form has its own saved responses. Date fields use the run date.
 4. Choose **Save form**, then review the saved responses and explicitly confirm that they are correct.
-5. If you change an answer later, FormFiller asks you to review the saved responses again.
+5. Choose **Fill & submit** to submit that reviewed form without scheduling it. If you change an answer later, save and review it again. The last confirmed submission pre-fills the next visit, while newer saved edits are preserved.
+6. Scheduling is optional. Expand **Scheduling (optional)** to add or pause automatic school-day submission. Existing scheduled forms keep their schedules.
 
 Unsupported question types need attention in the form or its configuration. FormFiller does not guess an answer for an unsupported field or skip its schema checks.
 
