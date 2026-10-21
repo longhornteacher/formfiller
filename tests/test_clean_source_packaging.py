@@ -44,6 +44,14 @@ class CleanSourcePackagingTests(unittest.TestCase):
             (fake_package / "web_static" / "nested").mkdir(parents=True)
             for module in source_allowlist():
                 (fake_package / module).write_text(f"# synthetic module: {module}\n", encoding="utf-8")
+            (fake_package / "web.py").write_text(
+                "import argparse, json\n"
+                "parser = argparse.ArgumentParser()\n"
+                "parser.add_argument('--private', action='store_true')\n"
+                "parser.add_argument('--open', action='store_true')\n"
+                "parser.add_argument('--workspace')\n"
+                "parser.add_argument('--runtime')\n"
+                "print(json.dumps(vars(parser.parse_args())))\n", encoding="utf-8")
             (fake_package / "web_static" / "index.html").write_text("synthetic page", encoding="utf-8")
             (fake_package / "web_static" / "nested" / "app.js").write_text("synthetic script", encoding="utf-8")
             (fake_package / "web_static" / "ui_smoke.py").write_text("SYNTHETIC_TEST_ONLY", encoding="utf-8")
@@ -104,7 +112,31 @@ class CleanSourcePackagingTests(unittest.TestCase):
                 path for path in expected if path.startswith("formfiller/")
             })
 
+            # A newly registered schedule stays quiet before workspace choice,
+            # even if the installing agent has another workspace in its env.
+            dormant = subprocess.run(
+                [shell, "-NoProfile", "-File", str(install_root / "Run-FormFillerOperation.ps1"),
+                 "-Scheduled", "-AppDataRoot", str(base / "fresh-local")],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            self.assertEqual(dormant.returncode, 0, dormant.stderr or dormant.stdout)
+            self.assertEqual(dormant.stdout.strip(), "")
+            self.assertFalse((base / "fresh-local").exists())
+
             launcher = install_root / "Run-FormFillerPrivate.ps1"
+            # Exercise the generated PowerShell signature and Python argparse,
+            # rather than a permissive stub that hides positional binding bugs.
+            for paths in ([], ['-Workspace', str(base / 'private with spaces'),
+                               '-Runtime', str(base / 'runtime with spaces')]):
+                launched = subprocess.run(
+                    [shell, '-NoProfile', '-File', str(launcher), *paths,
+                     '-WebArgs', '--open'], capture_output=True, text=True, timeout=30)
+                self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+                arguments = json.loads(launched.stdout)
+                self.assertTrue(arguments['private'])
+                self.assertTrue(arguments['open'])
+                self.assertEqual(arguments['workspace'], str(base / 'private with spaces') if paths else None)
+                self.assertEqual(arguments['runtime'], str(base / 'runtime with spaces') if paths else None)
             injected = install_root / "formfiller" / "injected.py"
             injected.write_text("# synthetic unlisted module\n", encoding="utf-8")
             checked = subprocess.run(

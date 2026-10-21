@@ -33,9 +33,12 @@ $expectedFiles = @(
     'formfiller\ownership.py',
     'formfiller\run_and_check.py',
     'formfiller\runner.py',
+    'formfiller\scheduling.py',
+    'formfiller\schema_changes.py',
     'formfiller\state.py',
     'formfiller\store.py',
     'formfiller\workspace.py',
+    'formfiller\skyward.py',
     'formfiller\web.py',
     'requirements.txt'
 )
@@ -158,8 +161,18 @@ exit $LASTEXITCODE
 $launcher | Set-Content -LiteralPath (Join-Path $destinationFull 'Run-FormFillerPrivate.ps1') -Encoding UTF8
 $operationLauncher = @'
 [CmdletBinding()]
-param([switch]$CheckOnly)
+param([switch]$CheckOnly, [switch]$Scheduled, [string]$AppDataRoot)
 $ErrorActionPreference = 'Stop'
+if ($AppDataRoot) {
+    if (-not [IO.Path]::IsPathFullyQualified($AppDataRoot)) { throw 'local_runtime_location_invalid' }
+    $env:LOCALAPPDATA = $AppDataRoot
+}
+if ($Scheduled) {
+    # First installation is dormant until a human chooses the private workspace.
+    # The explicit locator is authoritative, including packaged-app redirection.
+    Remove-Item Env:FORM_FILLER_WORKSPACE, Env:FORM_FILLER_RUNTIME, Env:FORM_FILLER_INSTALLED_APP -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'FormFiller\paths.json'))) { exit 0 }
+}
 $installRoot = $PSScriptRoot
 $installPath = (Resolve-Path -LiteralPath $installRoot).Path.TrimEnd('\')
 $manifestPath = Join-Path $installRoot 'install-manifest.json'
@@ -198,6 +211,13 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Installed vir
 Set-Location -LiteralPath $installRoot
 $operationArgs = @()
 if ($CheckOnly) { $operationArgs += '--check-only' }
+if ($Scheduled) {
+    # This also supports a scheduler device whose OS uses another time zone.
+    & $python -c "import sys; from datetime import datetime; from zoneinfo import ZoneInfo; n=datetime.now(ZoneInfo('America/Chicago')); sys.exit(0 if 720 <= n.hour*60+n.minute < 930 else 3)"
+    if ($LASTEXITCODE -eq 3) { exit 0 }
+    if ($LASTEXITCODE -ne 0) { exit 2 }
+    $operationArgs += '--scheduled'
+}
 $env:PYTHONDONTWRITEBYTECODE = '1'
 & $python -m formfiller.run_and_check @operationArgs
 exit $LASTEXITCODE

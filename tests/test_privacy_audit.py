@@ -14,7 +14,7 @@ from tools.audit_privacy import PUBLIC_CALENDAR, calendar_valid, inspect_file
 class PrivacyAuditTests(unittest.TestCase):
     def test_private_files_are_blocked_even_when_force_staged(self):
         for path in ('outputs/config/forms.json', 'backup/forms.json', 'browser-profile/Cookies',
-                     'outputs/state/2026-10-02/state.json', '.env', 'identity.key'):
+                     'outputs/state/2026-10-02/state.json', 'backup/installation.json', '.env', 'identity.key'):
             self.assertEqual(inspect_file(path, b'{}'), ['private_file'])
 
     def test_identifying_data_and_secrets_return_codes_without_values(self):

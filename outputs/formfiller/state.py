@@ -11,6 +11,7 @@ import os
 import re
 import socket
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -40,6 +41,19 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("utf-8")
 
 
+def _atomic_replace(source, destination):
+    # Windows scanners can briefly hold a file without delete sharing. Retry
+    # only this atomic filesystem operation, never the browser or submission.
+    for attempt in range(5):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as exc:
+            if os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == 4:
+                raise
+            time.sleep(0.02 * (attempt + 1))
+
+
 def _atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=".state-", suffix=".tmp", dir=path.parent)
@@ -48,7 +62,7 @@ def _atomic_json(path: Path, value: Any) -> None:
             stream.write(_json_bytes(value))
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp_name, path)
+        _atomic_replace(temp_name, path)
         # Persist the directory entry where the platform supports directory fsync.
         try:
             dir_fd = os.open(path.parent, os.O_RDONLY)

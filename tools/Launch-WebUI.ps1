@@ -67,6 +67,11 @@ try {
         $env:FORM_FILLER_WORKSPACE = $mapping.workspace
         $env:FORM_FILLER_RUNTIME = $mapping.runtime
         $env:FORM_FILLER_INSTALLED_APP = $mapping.installed_app
+    } elseif (Test-Path -LiteralPath (Join-Path $appRoot 'installation.json')) {
+        $installation = Get-Content -LiteralPath (Join-Path $appRoot 'installation.json') -Raw | ConvertFrom-Json
+        if ($installation.version -ne 1 -or -not ($installation.installed_app -is [string]) -or
+            -not [IO.Path]::IsPathFullyQualified($installation.installed_app)) { throw 'installation_invalid' }
+        $installedRoot = $installation.installed_app
     } else {
         Write-Output 'Setting up the FormFiller WebUI for first use...'
         $installedRoot = Join-Path $appRoot ('App\snapshot-ui-' + [Guid]::NewGuid().ToString('N').Substring(0, 12))
@@ -78,9 +83,13 @@ try {
             SourceBundle = (Join-Path $artifacts 'formfiller-clean-source'); InstallDependencies = $true
         }
         $existingPython = Join-Path $repoRoot 'outputs\.venv\Scripts\python.exe'
-        if (Test-Path -LiteralPath $existingPython -PathType Leaf) { $installArgs.PythonPath = $existingPython }
+        . (Join-Path $PSScriptRoot 'Bootstrap-WebUI.ps1') -RepositoryRoot $repoRoot -AppDataRoot $AppDataRoot
+        if (Test-FormFillerPython $existingPython) { $installArgs.PythonPath = $existingPython }
+        else { $installArgs.PythonPath = Resolve-FormFillerPython (Join-Path $appRoot 'Dependencies') }
         & (Join-Path $repoRoot 'tools\Install-ReviewedSnapshot.ps1') `
             @installArgs
+        [IO.File]::WriteAllText((Join-Path $appRoot 'installation.json'),
+            (@{version=1; installed_app=$installedRoot} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
     $launcher = Join-Path $installedRoot 'Run-FormFillerPrivate.ps1'
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
@@ -89,11 +98,13 @@ try {
     Write-Output 'Opening FormFiller in your browser. Keep this window open while using it.'
     # The installed launcher verifies its complete inventory and hashes before
     # private data can be loaded. Opening the UI never requests a submission.
-    & $launcher --open
+    # Bind explicitly: a bare --open binds to the launcher's first positional
+    # parameter ($Workspace), producing Python's invalid --workspace --open.
+    & $launcher -WebArgs @('--open')
     if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }
     exit 0
 } catch {
     # Exception text may contain a private path. Show only fixed instructions.
-    Write-Output 'The WebUI could not start. Check that Python 3.11+ and PowerShell 7 are installed and the installed FormFiller snapshot is intact.'
+    Write-Output 'The WebUI could not start. Check internet access or ask school IT whether dependency installation is blocked. If FormFiller was already installed, its snapshot may need repair.'
     exit 2
 }

@@ -8,7 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / 'tools' / 'Launch-WebUI.ps1'
-STUB_UI = """param([Parameter(ValueFromRemainingArguments=$true)][string[]]$WebArgs)
+STUB_UI = """[CmdletBinding()]
+param([string]$Workspace,[string]$Runtime,[int]$Port=0,
+    [Parameter(ValueFromRemainingArguments=$true)][string[]]$WebArgs)
+if ($Workspace -or $Runtime -or $Port) { throw 'Unexpected positional binding' }
 ConvertTo-Json -InputObject @($WebArgs) | Set-Content (Join-Path $PSScriptRoot 'launched.json')
 @{workspace=$env:FORM_FILLER_WORKSPACE;runtime=$env:FORM_FILLER_RUNTIME;installed_app=$env:FORM_FILLER_INSTALLED_APP} | ConvertTo-Json | Set-Content (Join-Path $PSScriptRoot 'resolved.json')
 exit 0
@@ -51,7 +54,7 @@ class WebUILauncherTests(unittest.TestCase):
         (self.repo / 'tools' / 'Build-CleanSource.ps1').write_text("""param($RepositoryRoot,$OutputRoot)
 New-Item -ItemType Directory -Path (Join-Path $OutputRoot 'formfiller-clean-source') -Force | Out-Null
 """)
-        (self.repo / 'tools' / 'Install-ReviewedSnapshot.ps1').write_text("""param($Destination,$SourceRoot,$SourceBundle,[switch]$InstallDependencies)
+        (self.repo / 'tools' / 'Install-ReviewedSnapshot.ps1').write_text("""param($Destination,$SourceRoot,$SourceBundle,$PythonPath,[switch]$InstallDependencies)
 if (-not $InstallDependencies) { throw 'fixture dependencies missing' }
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 @'
@@ -89,6 +92,16 @@ New-Item -ItemType Directory -Path $Destination -Force | Out-Null
         (self.app / 'paths.json').write_text('{bad JSON')
         result = self.launch()
         self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.app / 'App').exists())
+
+    def test_unfinished_first_use_reuses_installed_snapshot(self):
+        installed = self.root / 'unfinished installed'
+        installed.mkdir()
+        (installed / 'Run-FormFillerPrivate.ps1').write_text(STUB_UI)
+        (self.app / 'installation.json').write_text(json.dumps({'version': 1, 'installed_app': str(installed)}))
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((installed / 'launched.json').exists())
         self.assertFalse((self.app / 'App').exists())
 
 

@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
+from . import scheduling
+from .schema_changes import reconcile
+from .state import _atomic_json
+from .store import FormStore, template_fingerprint
+
 try:  # Supports both `python -m formfiller.runner` and package import.
     from .state import StateError, StateStore
 except ImportError:  # pragma: no cover - direct script fallback
@@ -122,7 +127,18 @@ def _migration_in_progress(root: Path) -> bool:
 
 def _config_fingerprint(form: dict[str, Any]) -> str:
     # The persisted value is a one-way digest; source material can include student details.
-    return _canonical_hash({key: form.get(key) for key in ("url", "schema", "answers")})
+    return template_fingerprint(form)
+
+
+def _remember_submission(config_dir, form, day, fingerprint):
+    # Once submission is confirmed, a defaults-write failure must not cause an
+    # uncertain outcome, a retry, or any repeat browser action.
+    try:
+        FormStore(config_dir).record_submission(form["alias"], form, day, fingerprint)
+        return True
+    except Exception:
+        _emit(f"warning alias={form['alias']} code=last_submission_not_saved")
+        return False
 
 
 def _schema_fingerprint(schema: Any) -> str:
@@ -191,6 +207,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     mode.add_argument("--approve-schema", metavar="ALIAS", help="Approve the configured schema fingerprint for an alias.")
     mode.add_argument("--login", nargs="?", const="F01", metavar="ALIAS", help="Open the dedicated profile for manual sign-in; never submits.")
     parser.add_argument("--resume", action="store_true", help="Retry only pre-submit failures for this date.")
+    parser.add_argument("--scheduled", action="store_true", help="Run only due scheduled templates, once, within the afternoon window.")
+    parser.add_argument("--form", metavar="ALIAS", help="Run one saved form, whether or not it is scheduled.")
     parser.add_argument("--config-dir", type=Path)
     parser.add_argument("--state-dir", type=Path)
     return parser.parse_args(argv)
@@ -211,6 +229,9 @@ def _log(store: StateStore, alias: str | None, status: str, code: str | None = N
 
 def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = None) -> int:
     args = _parse_args(argv)
+    if args.scheduled and (args.form or args.resume or args.preview or args.inspect is not None or args.login is not None or args.approve_schema):
+        _emit("error code=schedule_mode_invalid")
+        return EXIT_CONFIG
     root = Path(project_root or Path.cwd()).resolve()
     try:
         workspace = resolve_workspace(root)
@@ -224,6 +245,8 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
     try:
         settings = _load_json(config_dir / "settings.json", "settings_config")
         forms = _forms(config_dir / "forms.json")
+        if args.inspect is None and args.login is None and not args.approve_schema and not args.form:
+            forms = [form for form in forms if scheduling.enabled(form)]
         if not isinstance(settings, dict):
             raise ValueError("settings_config")
         if type(settings.get("live_enabled", False)) is not bool:
@@ -268,6 +291,9 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
 
     inspect_alias = args.inspect
     login_alias = args.login
+    if args.form and not any(form["alias"] == args.form for form in forms):
+        _emit("error code=unknown_alias")
+        return EXIT_CONFIG
     if login_alias and not any(form["alias"] == login_alias for form in forms):
         _emit("error code=unknown_alias")
         return EXIT_CONFIG
@@ -291,6 +317,8 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
         selected = [form for form in forms if form["alias"] == login_alias]
     else:
         selected = forms if inspect_alias in (None, "*") else [f for f in forms if f["alias"] == inspect_alias]
+    if args.form:
+        selected = [form for form in selected if form["alias"] == args.form]
     legacy_profile = workspace.profile_dir if workspace.external_workspace else (root / "config" / "browser-profile")
     profile = (str(workspace.profile_dir) if workspace.external_runtime else
                settings.get("browser_profile_path", str(legacy_profile)))
@@ -302,7 +330,7 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
     browser_config["browser_profile_path"] = str(profile_path)
     is_inspect = inspect_alias is not None
     is_login = login_alias is not None
-    live = bool(args.live or (not args.preview and not is_inspect and settings.get("live_enabled", False)))
+    live = bool(args.live or args.scheduled or (not args.preview and not is_inspect and settings.get("live_enabled", False)))
     if is_inspect or is_login:
         live = False
     if live and not settings.get("live_enabled", False):
@@ -321,6 +349,8 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
             # acquiring it so a concurrent edit cannot leave a stale submission plan.
             settings = _load_json(config_dir / "settings.json", "settings_config")
             forms = _forms(config_dir / "forms.json")
+            if args.inspect is None and args.login is None and not args.form:
+                forms = [form for form in forms if scheduling.enabled(form)]
             if (not isinstance(settings, dict) or type(settings.get("live_enabled", False)) is not bool
                     or type(settings.get("max_calendar_age_days", 14)) is not int
                     or settings.get("max_calendar_age_days", 14) < 0):
@@ -333,6 +363,10 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                 selected = [form for form in forms if form["alias"] == login_alias]
             else:
                 selected = forms if inspect_alias in (None, "*") else [f for f in forms if f["alias"] == inspect_alias]
+            if args.form:
+                selected = [form for form in selected if form["alias"] == args.form]
+                if not selected:
+                    raise ValueError("unknown_alias")
             legacy_profile = workspace.profile_dir if workspace.external_workspace else (root / "config" / "browser-profile")
             profile = (str(workspace.profile_dir) if workspace.external_runtime else
                        settings.get("browser_profile_path", str(legacy_profile)))
@@ -342,7 +376,7 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
             browser_config = dict(settings)
             browser_config["project_root"] = str(root)
             browser_config["browser_profile_path"] = str(profile_path)
-            live = bool(args.live or (not args.preview and not is_inspect and settings.get("live_enabled", False)))
+            live = bool(args.live or args.scheduled or (not args.preview and not is_inspect and settings.get("live_enabled", False)))
             if is_inspect or is_login:
                 live = False
             if live and not settings.get("live_enabled", False):
@@ -355,6 +389,22 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
             if _migration_in_progress(root):
                 _emit("error code=migration_in_progress")
                 return EXIT_CONFIG
+            if args.scheduled:
+                # Settings may have changed while waiting for the shared lock.
+                # Recheck the approved source before opening any Forms page.
+                if not _load_calendar(settings, config_dir, today):
+                    _emit(f"skip code=not_school_day date={today.isoformat()}")
+                    return EXIT_NOT_SCHOOL_DAY
+                instant = scheduling.now()
+                if instant.date() != today:
+                    raise ValueError("date_changed")
+                selected = scheduling.due(store, forms, instant)
+                if not selected:
+                    return EXIT_OK
+                # Durable claims prohibit retries after failures and interrupted starts.
+                scheduling.claim(store, selected, instant)
+            if not selected:
+                return EXIT_OK
             session = BrowserSession(browser_config)
             with session:
                 if is_login:
@@ -400,19 +450,32 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                             observed = session.inspect(form)
                             observed_fp = _schema_fingerprint(observed)
                             expected_schema_fp = _schema_fingerprint(form["schema"])
-                            if observed_fp != expected_schema_fp:
-                                store.record_schema(alias, observed_fp, approved=False)
-                                raise ValueError("schema_mismatch")
                             if not store.schema_approved(alias, expected_schema_fp, fingerprint):
                                 raise ValueError("schema_not_approved")
-                            session.preview(form, today)
-                            pending.append((form, record))
+                            if observed_fp != expected_schema_fp:
+                                _save_observed_schema(config_dir, alias, observed)
+                                try:
+                                    effective, changed = reconcile(form, observed, today)
+                                except BrowserError:
+                                    store.record_schema(alias, observed_fp, approved=False)
+                                    _atomic_json(store.root / "changes" / f"{alias}.json", {"code": "schema_review_required"})
+                                    raise ValueError("schema_mismatch") from None
+                                if changed:
+                                    _atomic_json(store.root / "changes" / f"{alias}.json", {"code": "schema_options_updated"})
+                                    _emit(f"warning alias={alias} code=schema_options_updated")
+                            else:
+                                effective = form
+                            session.preview(effective, today)
+                            pending.append((effective, record))
                         except Exception as exc:
                             known = str(exc) if isinstance(exc, ValueError) and str(exc) in {"schema_mismatch", "schema_not_approved"} else None
                             code = _safe_code(getattr(exc, "code", known), "preflight_failed")
                             store.transition(alias, status, "failed", code)
                             _log(store, alias, "preflight_failed", code)
                             _emit(f"failed alias={alias} code={code}")
+                            if args.scheduled:
+                                blocked = True
+                                continue
                             _finish_live(store, [form["alias"] for form in forms])
                             return EXIT_BROWSER if isinstance(exc, BrowserError) else EXIT_CONFIG
                     for form, record in pending:
@@ -430,6 +493,10 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                             if current_day != today:
                                 _log(store, None, "calendar_blocked", "date_changed")
                                 raise _GateError("date_changed")
+                            if args.scheduled:
+                                instant = scheduling.now()
+                                if not scheduling.START <= instant.hour * 60 + instant.minute < scheduling.END:
+                                    raise _GateError("schedule_window_closed")
                             try:
                                 still_school_day = _load_calendar(settings, config_dir, today)
                             except (ValueError, CalendarError) as exc:
@@ -473,11 +540,12 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                                 _finish_live(store, [item["alias"] for item in forms])
                             return EXIT_BROWSER
                         if submitted:
+                            _remember_submission(config_dir, form, today, record["config"])
                             _emit(f"submitted alias={alias} date={today.isoformat()}")
                         else:
                             _finish_live(store, [item["alias"] for item in forms])
                             return EXIT_BROWSER
-                    counts = _finish_live(store, [form["alias"] for form in forms])
+                    counts = _finish_live(store, [form["alias"] for form in (selected if args.scheduled or args.form else forms)])
                     if counts["failed"] or counts["uncertain"] or counts["submitting"] or counts["pending"] or counts["missing"]:
                         blocked = True
                     return EXIT_BROWSER if blocked else EXIT_OK

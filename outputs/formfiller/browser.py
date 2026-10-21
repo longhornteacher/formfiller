@@ -45,7 +45,11 @@ def _answer_plan(form: dict, today) -> list[list[object]]:
     for question, answer in zip(questions, answers):
         controls = question['controls']
         kind = answer.get('kind')
-        if kind == 'date':
+        if kind == 'skip':
+            if question.get('required') or any(c['kind'] not in ('radio', 'checkbox', 'input', 'text', 'textarea', 'combobox') for c in controls):
+                raise BrowserError('ANSWER_CONFIG_INVALID')
+            result.append([False if c['kind'] in ('radio', 'checkbox') else '' for c in controls])
+        elif kind == 'date':
             if len(controls) != 1 or controls[0]['kind'] != 'combobox':
                 raise BrowserError('ANSWER_CONFIG_INVALID')
             result.append([f'{today.month}/{today.day}/{today.year}'])

@@ -21,8 +21,11 @@ from zoneinfo import ZoneInfo
 
 from .browser import BrowserError, BrowserSession, answer_plan
 from .calendar import CalendarError, load_calendar
-from .runner import _config_fingerprint, _schema_fingerprint
+from .runner import _config_fingerprint, _schema_fingerprint, _remember_submission
+from .skyward import (MARKS, SkywardSession, demo_courses, demo_roster, load_config, staged_counts,
+                      suggest_mark)
 from .state import StateError, StateStore
+from . import scheduling
 
 SAFE_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
 STATUSES = ("submitted", "failed", "uncertain", "submitting", "pending", "missing")
@@ -92,7 +95,11 @@ def runner_answers(schema, values):
     for field in normalized_schema(schema)["fields"]:
         value = values.get(field["id"], "")
         kind = field["type"]
-        if kind == "text" and isinstance(value, str):
+        if kind != "date" and not field["required"] and (value == "" or value == []):
+            answers.append({"kind": "skip"})
+        elif kind == "text" and isinstance(value, str):
+            if field["required"] and not value.strip():
+                raise WebError("required_answer_missing")
             answers.append({"kind": "text", "value": value})
         elif kind == "date":
             answers.append({"kind": "date"})
@@ -173,8 +180,12 @@ class WebApp:
         self.token = secrets.token_urlsafe(32)
         self.store = FormStore(self.config_dir)
         self.operation = threading.Lock()
+        self.signin_process = None
         self.inspections = {}
         self.needs_setup = needs_setup
+        # Student names stay in memory only; nothing here is persisted.
+        self.roster, self.marks, self.attendance_date, self.attendance_submitted = [], {}, None, False
+        self.course_id = None
 
     @contextmanager
     def editing(self):
@@ -201,6 +212,22 @@ class WebApp:
         except CalendarError as exc:
             raise WebError(exc.code) from None
 
+    def calendar_summary(self):
+        """Summarize a validated calendar without returning its provenance or paths."""
+        try:
+            settings = self.settings()
+            configured = Path(settings.get("calendar_path", "calendar.json"))
+            path = configured if configured.is_absolute() else self.config_dir / configured
+            document = read_json(path, "calendar_unavailable")
+            from .calendar import _validate_document
+            start, end, school_days, _non_school_days, _complete, _exported_at = _validate_document(document)
+            # Validate freshness and any approved workbook provenance before reporting coverage.
+            load_calendar(path, start, max_age_days=settings.get("max_calendar_age_days", 14))
+            return {"coverage_start": start.isoformat(), "coverage_end": end.isoformat(),
+                    "school_day_count": len(school_days)}
+        except (WebError, CalendarError, TypeError, ValueError, OSError):
+            return None
+
     def forms(self):
         if self.needs_setup:
             return []
@@ -208,33 +235,61 @@ class WebApp:
 
     def form(self, form_id):
         form = self.store.get_form(form_id)
+        seed, answer_source = self.store.submission_seed(form)
         state = StateStore(self.state_dir, today())
         configured = bool(form.get("url") and form.get("schema") and form.get("answers"))
         approved = configured and state.schema_approved(form["alias"], _schema_fingerprint(form["schema"]), _config_fingerprint(form))
+        change = state._read_json(state.root / "changes" / f"{form_id}.json", {})
+        record = state.read(form_id) or {}
+        daily_plan = state._read_json(state.day_dir / "schedule.json", {"claimed": []})
+        claimed = form_id in daily_plan.get("claimed", [])
         return {"id": form["id"], "name": form["name"], "url": form.get("url", ""),
-                "schema": normalized_schema(form.get("schema")), "answers": normalized_answers(form.get("answers")),
+                "schema": normalized_schema(form.get("schema")), "answers": normalized_answers(seed.get("answers")),
+                "answer_source": answer_source,
+                "last_submitted_on": (form.get("last_submission") or {}).get("date"),
                 "review_required": not approved, "configured": configured,
+                "scheduled": scheduling.enabled(form), "change_code": change.get("code"),
+                "today_status": record.get("status", "pending"),
+                "can_submit": bool(approved and record.get("status", "pending") == "pending" and not claimed),
                 "review_token": _config_fingerprint(form) if configured else None}
 
     def status(self):
         items = []
         state = StateStore(self.state_dir, today())
+        schedule = {"slots": {}, "claimed": []}
+        schedule_code = None
+        try:
+            if self.calendar():
+                with self.editing():
+                    forms = [self.store.get_form(item["id"]) for item in self.store.list_forms()]
+                    schedule = scheduling.plan(state, forms, scheduling.now())
+            else:
+                schedule_code = "not_school_day"
+        except (WebError, StateError) as exc:
+            schedule_code = exc.code
         for form in self.forms():
             record = state.read(form["id"]) or {}
             status = record.get("status", "pending")
             if status not in STATUSES:
                 raise WebError("state_invalid")
             items.append({"id": form["id"], "name": form["name"], "status": status,
+                          "scheduled": form["scheduled"],
+                          "scheduled_time": (f'{schedule["slots"][form["id"]] // 60:02}:{schedule["slots"][form["id"]] % 60:02}'
+                                             if form["scheduled"] and form["id"] in schedule["slots"] else None),
+                          "schedule_claimed": form["id"] in schedule["claimed"],
+                          "change_code": form["change_code"],
                           "review_required": form["review_required"]})
         counts = {status: sum(item["status"] == status for item in items) for status in STATUSES}
         checks = self.readiness()
-        can_run = bool(items) and not any(item["review_required"] for item in items)
-        can_run = can_run and not any(item["status"] in ("failed", "uncertain", "submitting") for item in items)
-        can_run = can_run and not all(item["status"] == "submitted" for item in items)
+        scheduled_items = [item for item in items if item["scheduled"]]
+        can_run = bool(scheduled_items) and not any(item["review_required"] for item in scheduled_items)
+        can_run = can_run and not any(item["status"] in ("failed", "uncertain", "submitting") or item["schedule_claimed"] for item in scheduled_items if item["status"] != "submitted")
+        can_run = can_run and not all(item["status"] == "submitted" for item in scheduled_items)
         if self.mode == "private":
             can_run = can_run and checks["ready"]
         return {"date": today().isoformat(), "items": items, "counts": counts, "expected": len(items),
-                "mode": self.mode, "can_run": can_run}
+                "mode": self.mode, "can_run": can_run, "schedule_code": schedule_code,
+                "schedule_window": "12:00–15:30 America/Chicago"}
 
     def history(self):
         items = []
@@ -270,7 +325,7 @@ class WebApp:
                           "code": "instructional_date" if instructional else "non_school_day"})
         except WebError as exc:
             items.append({"label": "District calendar", "status": "blocked", "code": exc.code})
-        forms = self.forms()
+        forms = [form for form in self.forms() if form["scheduled"]]
         reviewed = bool(forms) and all(not form["review_required"] for form in forms)
         items.append({"label": "Form schemas", "status": "ready" if reviewed else "blocked",
                       "code": "schemas_reviewed" if reviewed else "schema_review_required"})
@@ -288,7 +343,7 @@ class WebApp:
                 code = getattr(exc, "code", "runtime_owner_invalid")
                 items.append({"label": "Runner device", "status": "blocked", "code": code})
         return {"items": items, "ready": not any(item["status"] in ("blocked", "skipped") for item in items),
-                "mode": self.mode}
+                "mode": self.mode, "calendar_summary": self.calendar_summary()}
 
     def sync(self):
         checks = self.readiness()["items"]
@@ -313,7 +368,39 @@ class WebApp:
                     schema = browser.inspect({"alias": "inspection", "url": url})
             token = secrets.token_urlsafe(24)
             self.inspections[token] = (time.monotonic() + 600, url, schema)
-        return {"schema": normalized_schema(schema), "inspect_token": token, "review_required": True}
+        answers = {}
+        if payload.get("form_id"):
+            original = self.store.get_form(payload["form_id"])
+            if original.get("url") == url:
+                seed, _ = self.store.submission_seed(original, exact_schema=False)
+                old_questions = (seed.get("schema") or {}).get("questions", [])
+                old_answers = normalized_answers(seed.get("answers"))
+                titles = [q.get("title") for q in old_questions]
+                new_fields = normalized_schema(schema)["fields"]
+                for index, field in enumerate(new_fields):
+                    title = schema["questions"][index]["title"]
+                    if titles.count(title) != 1:
+                        continue
+                    value = old_answers.get(f"q{titles.index(title)}", "")
+                    if field["type"] in ("choice", "multichoice", "matrix"):
+                        value = ([v for v in value if v in field["options"]] if isinstance(value, list)
+                                 else value if value in field["options"] else "")
+                    answers[field["id"]] = value
+        return {"schema": normalized_schema(schema), "answers": answers,
+                "inspect_token": token, "review_required": True}
+
+    def schedule_form(self, form_id, payload):
+        if type(payload.get("scheduled")) is not bool:
+            raise WebError("invalid_schedule")
+        with self.editing():
+            form = self.store.get_form(form_id)
+            if payload["scheduled"] and self.form(form_id)["review_required"]:
+                raise WebError("review_answers_before_scheduling", 409)
+            token = payload.get("review_token")
+            if payload["scheduled"] and (not isinstance(token, str) or not secrets.compare_digest(token, _config_fingerprint(form))):
+                raise WebError("review_changed_refresh_required", 409)
+            self.store.update_form(form_id, {"scheduled": payload["scheduled"]})
+        return self.form(form_id)
 
     def mutate_form(self, payload, form_id=None):
         if self.needs_setup:
@@ -346,6 +433,8 @@ class WebApp:
             if saved.get("schema") and not StateStore(self.state_dir, today()).schema_approved(
                     saved["alias"], _schema_fingerprint(saved["schema"]), _config_fingerprint(saved)):
                 StateStore(self.state_dir, today()).record_schema(saved["alias"], _schema_fingerprint(saved["schema"]))
+            if token:
+                (self.state_dir / "changes" / f'{saved["alias"]}.json').unlink(missing_ok=True)
         return self.form(created["id"])
 
     def approve_form(self, form_id, payload):
@@ -365,6 +454,177 @@ class WebApp:
                 approved=True, config_fingerprint=fingerprint)
         return self.form(form_id)
 
+    def _attendance_current(self):
+        if self.attendance_date != today():
+            self.roster, self.marks, self.attendance_submitted, self.course_id = [], {}, False, None
+            self.attendance_date = today()
+
+    def skyward_config(self):
+        if self.mode == "demo":
+            return {"login_url": "", "host": "", "courses": demo_courses()}
+        try:
+            return load_config(read_json(self.config_dir / "skyward.json", "skyward_not_configured"))
+        except BrowserError as exc:
+            code = "skyward_url_invalid" if exc.code == "SKYWARD_URL_INVALID" else "skyward_config_invalid"
+            raise WebError(code) from None
+
+    def skyward_settings(self):
+        """Return the editor model without exposing paths or private file errors."""
+        if self.mode == "demo":
+            return {"mode": "demo", "editable": False, "configured": True,
+                    "config": self.skyward_config()}
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        path = self.config_dir / "skyward.json"
+        if not path.exists():
+            return {"mode": "private", "editable": True, "configured": False,
+                    "config": {"login_url": "", "host": "", "courses": []}}
+        return {"mode": "private", "editable": True, "configured": True,
+                "config": self.skyward_config()}
+
+    def replace_skyward_config(self, payload):
+        """Replace the complete, validated course list in the selected private workspace."""
+        if self.mode != "private":
+            raise WebError("demo_config_read_only", 409)
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        if not isinstance(payload, dict) or set(payload) != {"login_url", "courses"}:
+            raise WebError("skyward_config_invalid")
+        courses = payload.get("courses")
+        if not isinstance(courses, list) or any(not isinstance(course, dict)
+                or not set(course) <= {"id", "name", "period"} for course in courses):
+            raise WebError("skyward_config_invalid")
+        try:
+            validated = load_config(payload)
+        except BrowserError as exc:
+            code = "skyward_url_invalid" if exc.code == "SKYWARD_URL_INVALID" else "skyward_config_invalid"
+            raise WebError(code) from None
+        # Store only the canonical configuration, never any supplied path or extra field.
+        from .state import _atomic_json
+        with self.editing():
+            try:
+                _atomic_json(self.config_dir / "skyward.json", {
+                    "login_url": validated["login_url"], "courses": validated["courses"]})
+            except Exception:
+                raise WebError("skyward_config_save_failed", 500) from None
+        return self.skyward_settings()
+
+    def attendance(self):
+        empty = {"date": today().isoformat(), "mode": self.mode, "loaded": False, "students": [], "courses": [],
+                 "course": None, "counts": {mark: 0 for mark in MARKS}, "submitted": False}
+        if self.needs_setup:
+            return {**empty, "needs_setup": True}
+        self._attendance_current()
+        try:
+            courses = [{"id": c["id"], "name": c["name"], "period": c["period"]} for c in self.skyward_config()["courses"]]
+        except WebError:
+            courses = []
+        students = [{"id": s["id"], "name": s["name"], "details": s["details"], "suggested": s["suggested"],
+                     "mark": self.marks.get(s["id"], "present")} for s in self.roster]
+        return {**empty, "loaded": bool(self.roster), "students": students, "courses": courses,
+                "course": self.course_id, "counts": staged_counts(self.roster, self.marks),
+                "submitted": self.attendance_submitted}
+
+    def load_roster(self, payload):
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        course_id = payload.get("course")
+        if not isinstance(course_id, str):
+            raise WebError("course_required")
+        with self.editing():
+            self._attendance_current()
+            if self.attendance_submitted:
+                raise WebError("attendance_already_submitted", 409)
+            config = self.skyward_config()
+            if course_id not in {c["id"] for c in config["courses"]}:
+                raise WebError("skyward_course_unknown")
+            if self.mode == "demo":
+                roster = demo_roster(today())
+            else:
+                self.calendar()  # Non-instructional or stale dates stop before Edge opens.
+                settings = self.settings()
+                settings["browser_profile_path"] = str(self.profile_dir.resolve())
+                with SkywardSession(settings) as browser:
+                    roster = browser.read_roster(config, course_id)
+            self.roster = [{"id": f"s{index}", **student, "suggested": suggest_mark(student["details"], today())}
+                           for index, student in enumerate(roster)]
+            # The J rule pre-marks absences; the teacher reviews and can change any mark.
+            self.marks = {s["id"]: "absent" for s in self.roster if s["suggested"] == "absent"}
+            self.course_id = course_id
+        return self.attendance()
+
+    def set_marks(self, payload):
+        marks = payload.get("marks")
+        if not isinstance(marks, dict):
+            raise WebError("marks_invalid")
+        with self.editing():
+            self._attendance_current()
+            if self.attendance_submitted:
+                raise WebError("attendance_already_submitted", 409)
+            known = {student["id"] for student in self.roster}
+            if not set(marks) <= known or not all(value in MARKS for value in marks.values()):
+                raise WebError("marks_invalid")
+            self.marks = {key: value for key, value in marks.items() if value != "present"}
+        return self.attendance()
+
+    def submit_attendance(self):
+        if self.mode != "demo":
+            raise WebError("attendance_posting_unavailable", 409)
+        with self.editing():
+            self._attendance_current()
+            if not self.roster:
+                raise WebError("roster_required", 409)
+            if self.attendance_submitted:
+                raise WebError("attendance_already_submitted", 409)
+            self.attendance_submitted = True
+        return self.attendance()
+
+    def submit_form(self, form_id):
+        """Explicit submission of one reviewed form, independent of enrollment."""
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        if not self.operation.acquire(blocking=False):
+            raise WebError("operation_in_progress", 409)
+        try:
+            state = StateStore(self.state_dir, today())
+            with state.lock():
+                view = self.form(form_id)
+                if view["today_status"] == "submitted":
+                    raise WebError("already_submitted", 409)
+                if view["review_required"]:
+                    raise WebError("review_answers_before_submitting", 409)
+                if not view["can_submit"]:
+                    raise WebError("manual_review_required", 409)
+                if self.mode == "demo":
+                    form = self.store.get_form(form_id)
+                    fingerprint = _config_fingerprint(form)
+                    state.bind_config(form_id, fingerprint)
+                    state.transition(form_id, "pending", "submitting")
+                    state.transition(form_id, "submitting", "submitted")
+                    _remember_submission(self.config_dir, form, today(), fingerprint)
+                    return {"submitted": True, "mode": self.mode, "form": self.form(form_id)}
+            if not self.installed_root:
+                raise WebError("installed_snapshot_required", 403)
+            verify_installation(self.installed_root)
+            environment = os.environ.copy()
+            environment.update({"FORM_FILLER_WORKSPACE": str(self.config_dir.parent.resolve()),
+                                "FORM_FILLER_RUNTIME": str(self.state_dir.parent.resolve()),
+                                "PYTHONDONTWRITEBYTECODE": "1"})
+            try:
+                result = subprocess.run([sys.executable, "-m", "formfiller.runner", "--live", "--form", form_id],
+                    cwd=self.installed_root, env=environment, capture_output=True, timeout=1800)
+            except subprocess.TimeoutExpired:
+                raise WebError("run_outcome_requires_review", 409) from None
+            if result.returncode != 0:
+                codes = re.findall(r"(?:^|\s)code=([a-z0-9_]{1,48})(?=\s|$)", result.stdout.decode("utf-8", errors="replace"))
+                raise WebError(codes[-1] if codes else "form_submission_blocked", 409)
+            record = state.read(form_id) or {}
+            if record.get("status") != "submitted":
+                raise WebError("submission_not_confirmed", 409)
+            return {"submitted": True, "mode": self.mode, "form": self.form(form_id)}
+        finally:
+            self.operation.release()
+
     def run_once(self):
         if self.needs_setup:
             raise WebError("workspace_required", 409)
@@ -373,11 +633,11 @@ class WebApp:
         try:
             if self.mode == "demo":
                 with StateStore(self.state_dir, today()).lock():
-                    for item in self.forms():
+                    for item in (form for form in self.forms() if form["scheduled"]):
                         if item["review_required"]:
                             raise WebError("schema_review_required", 409)
                     state = StateStore(self.state_dir, today())
-                    for item in self.forms():
+                    for item in (form for form in self.forms() if form["scheduled"]):
                         record = state.bind_config(item["id"], _config_fingerprint(self.store.get_form(item["id"])))
                         if record["status"] == "submitted":
                             continue
@@ -385,6 +645,7 @@ class WebApp:
                             raise WebError("manual_review_required", 409)
                         state.transition(item["id"], "pending", "submitting")
                         state.transition(item["id"], "submitting", "submitted")
+                        _remember_submission(self.config_dir, self.store.get_form(item["id"]), today(), record["config"])
                 return {"exit_code": 0, "mode": "demo", **self.status()}
             if not self.installed_root:
                 raise WebError("installed_snapshot_required", 403)
@@ -401,6 +662,46 @@ class WebApp:
             return {"exit_code": result.returncode, "mode": "private", **self.status()}
         finally:
             self.operation.release()
+
+    def start_sign_in(self, payload):
+        """Open the installed runner's manual sign-in flow for a saved form.
+
+        Launching the browser is only a user action; readiness stays unverified
+        until the runner later checks access while opening the form.
+        """
+        if self.mode != "private" or self.needs_setup:
+            raise WebError("sign_in_unavailable", 409)
+        if not isinstance(payload, dict) or set(payload) != {"form_id"} or not isinstance(payload["form_id"], str):
+            raise WebError("request_invalid")
+        if not self.installed_root:
+            raise WebError("installed_snapshot_required", 403)
+        if os.name != "nt" or not hasattr(subprocess, "CREATE_NEW_CONSOLE"):
+            raise WebError("sign_in_unavailable", 409)
+        with self.editing():
+            verify_installation(self.installed_root)
+            try:
+                form = self.store.get_form(payload["form_id"])
+            except Exception:
+                raise WebError("form_not_configured", 409) from None
+            if not isinstance(form.get("url"), str) or not form.get("url"):
+                raise WebError("form_not_configured", 409)
+            if self.signin_process is not None and self.signin_process.poll() is None:
+                return {"started": True, "already_open": True, "verified": False}
+            environment = os.environ.copy()
+            environment["FORM_FILLER_WORKSPACE"] = str(self.config_dir.parent.resolve())
+            environment["FORM_FILLER_RUNTIME"] = str(self.state_dir.parent.resolve())
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            try:
+                self.signin_process = subprocess.Popen(
+                    [sys.executable, "-m", "formfiller.runner", "--login", form["alias"]],
+                    cwd=self.installed_root, env=environment,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    close_fds=True,
+                )
+            except Exception:
+                self.signin_process = None
+                raise WebError("sign_in_unavailable", 409) from None
+        return {"started": True, "already_open": False, "verified": False}
 
     def choose_workspace(self):
         """A human picks a folder in the installed app; API never accepts paths."""
@@ -502,7 +803,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET":
             routes = {"/api/session": lambda: {"csrf_token": app.token, "mode": app.mode, "needs_setup": app.needs_setup},
                       "/api/forms": lambda: {"forms": app.forms()}, "/api/today": app.status,
-                      "/api/history": app.history, "/api/readiness": app.readiness, "/api/sync": app.sync}
+                      "/api/history": app.history, "/api/attendance": app.attendance, "/api/readiness": app.readiness,
+                      "/api/sync": app.sync, "/api/skyward/config": app.skyward_settings}
             if path in routes:
                 return self.respond(200, routes[path]())
             if path.startswith("/api/forms/"):
@@ -538,6 +840,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, app.choose_workspace())
         if self.command == "POST" and path == "/api/forms":
             return self.respond(201, app.mutate_form(payload))
+        if self.command == "POST" and path == "/api/attendance/load":
+            return self.respond(200, app.load_roster(payload))
+        if self.command == "POST" and path == "/api/attendance/marks":
+            return self.respond(200, app.set_marks(payload))
+        if self.command == "POST" and path == "/api/attendance/submit":
+            return self.respond(200, app.submit_attendance())
+        if self.command == "POST" and path == "/api/sign-in":
+            return self.respond(200, app.start_sign_in(payload))
+        if self.command == "PUT" and path == "/api/skyward/config":
+            return self.respond(200, app.replace_skyward_config(payload))
         if self.command == "POST" and path == "/api/sync/check":
             return self.respond(200, app.sync())
         if self.command == "POST" and path == "/api/run":
@@ -545,6 +857,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "POST" and path.startswith("/api/forms/") and path.endswith("/approve"):
             form_id = unquote(path[len("/api/forms/"):-len("/approve")])
             return self.respond(200, app.approve_form(form_id, payload))
+        if self.command == "POST" and path.startswith("/api/forms/") and path.endswith("/schedule"):
+            form_id = unquote(path[len("/api/forms/"):-len("/schedule")])
+            return self.respond(200, app.schedule_form(form_id, payload))
+        if self.command == "POST" and path.startswith("/api/forms/") and path.endswith("/submit"):
+            form_id = unquote(path[len("/api/forms/"):-len("/submit")])
+            return self.respond(200, app.submit_form(form_id))
         if path.startswith("/api/forms/"):
             form_id = unquote(path[len("/api/forms/"):])
             if self.command == "PUT":
@@ -564,10 +882,8 @@ class Handler(BaseHTTPRequestHandler):
             code = str(exc.code).lower()
             code = code if SAFE_CODE.fullmatch(code) else "request_failed"
             self.respond(409, {"error": {"code": code, "message": code.replace("_", " ")}})
-        except Exception as exc:
-            code = getattr(exc, "code", "request_failed")
-            code = code if isinstance(code, str) and SAFE_CODE.fullmatch(code) else "request_failed"
-            self.respond(400, {"error": {"code": code, "message": code.replace("_", " ")}})
+        except Exception:
+            self.respond(400, {"error": {"code": "request_failed", "message": "request failed"}})
 
     do_GET = do_POST = do_PUT = do_DELETE = handle_safely
 
@@ -597,7 +913,7 @@ def main(argv=None):
             environment["PYTHONDONTWRITEBYTECODE"] = "1"
             command = ["pwsh", "-NoProfile", "-File", str(launcher)]
             if args.open:
-                command += ["--open"]
+                command += ["-WebArgs", "--open"]
             return subprocess.run(command, cwd=installed, env=environment).returncode
         if args.private:
             from .workspace import resolve_workspace

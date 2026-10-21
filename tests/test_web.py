@@ -122,6 +122,251 @@ class WebTests(unittest.TestCase):
         self.assertFalse(data['applied'])
         self.assertEqual(before, (self.root / 'config' / 'calendar.json').read_bytes())
 
+    def test_skyward_demo_config_is_synthetic_and_read_only(self):
+        code, data, _ = self.request('GET', '/api/skyward/config')
+        self.assertEqual(code, 200)
+        self.assertEqual(data['mode'], 'demo')
+        self.assertFalse(data['editable'])
+        self.assertEqual(data['config']['courses'], web.demo_courses())
+        self.assertFalse((self.root / 'config' / 'skyward.json').exists())
+        self.assertEqual(self.request('PUT', '/api/skyward/config', {
+            'login_url': 'https://example.invalid/login', 'courses': web.demo_courses()
+        })[0], 409)
+
+    def test_private_skyward_config_replacement_validates_and_persists_canonical_values(self):
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile', mode='private')
+        server = web.Server(('127.0.0.1', 0), app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port)
+            connection.request('GET', '/api/skyward/config', headers={
+                'Host': f'127.0.0.1:{server.server_port}', 'X-FormFiller-Token': app.token})
+            response = connection.getresponse()
+            empty = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertFalse(empty['configured'])
+            connection.close()
+
+            config = {'login_url': 'https://skyward.example.invalid/login',
+                      'courses': [{'id': '12345', 'name': ' Example Class ', 'period': ' 2nd '}]}
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port)
+            connection.request('PUT', '/api/skyward/config', body=json.dumps(config), headers={
+                'Host': f'127.0.0.1:{server.server_port}', 'Content-Type': 'application/json',
+                'X-FormFiller-Token': app.token})
+            response = connection.getresponse()
+            result = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertTrue(result['configured'])
+            self.assertEqual(result['config']['host'], 'skyward.example.invalid')
+            self.assertEqual(result['config']['courses'], [{'id': '12345', 'name': 'Example Class', 'period': '2nd'}])
+            connection.close()
+            saved = json.loads((self.root / 'private-config' / 'skyward.json').read_text())
+            self.assertEqual(saved, {'login_url': config['login_url'], 'courses': result['config']['courses']})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_private_skyward_config_rejects_invalid_config_and_paths(self):
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile', mode='private')
+        server = web.Server(('127.0.0.1', 0), app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            def put(payload):
+                connection = http.client.HTTPConnection('127.0.0.1', server.server_port)
+                connection.request('PUT', '/api/skyward/config', body=json.dumps(payload), headers={
+                    'Host': f'127.0.0.1:{server.server_port}', 'Content-Type': 'application/json',
+                    'X-FormFiller-Token': app.token})
+                response = connection.getresponse()
+                result = response.status, json.loads(response.read())
+                connection.close()
+                return result
+
+            base = {'login_url': 'https://skyward.example.invalid/login',
+                    'courses': [{'id': '12345', 'name': 'Example Class', 'period': ''}]}
+            code, invalid = put({**base, 'runtime_path': 'C:/private'})
+            self.assertEqual(code, 400)
+            self.assertEqual(invalid['error']['code'], 'skyward_config_invalid')
+            code, invalid = put({**base, 'courses': [{'id': 'bad', 'name': 'Example Class'}]})
+            self.assertEqual(code, 400)
+            self.assertEqual(invalid['error']['code'], 'skyward_config_invalid')
+            self.assertFalse((self.root / 'private-config' / 'skyward.json').exists())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_private_attendance_posting_is_blocked_even_with_staged_roster(self):
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile', mode='private')
+        app.roster = [{'id': 's0', 'name': 'Synthetic Student', 'details': {}, 'suggested': 'present'}]
+        app.attendance_date = web.today()
+        with self.assertRaisesRegex(web.WebError, '^attendance_posting_unavailable$'):
+            app.submit_attendance()
+        self.assertFalse(app.attendance_submitted)
+
+    def test_sign_in_launches_only_the_verified_installed_runner_and_stays_unverified(self):
+        install = self.root / 'installed'
+        install.mkdir()
+        app = web.WebApp(self.root / 'config', self.root / 'state', self.root / 'profile',
+                         mode='private', installed_root=install)
+        process = type('Process', (), {'poll': lambda self: None})()
+        with patch.object(web, 'verify_installation') as verify, \
+             patch.object(web.subprocess, 'Popen', return_value=process) as popen:
+            result = app.start_sign_in({'form_id': 'F01'})
+        self.assertEqual(result, {'started': True, 'already_open': False, 'verified': False})
+        verify.assert_called_once_with(install)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[-2:], ['--login', 'F01'])
+        self.assertEqual(popen.call_args.kwargs['cwd'], install)
+        self.assertEqual(popen.call_args.kwargs['env']['FORM_FILLER_WORKSPACE'], str((self.root / 'config').resolve().parent))
+
+    def test_sign_in_never_opens_in_demo_or_without_a_saved_form(self):
+        with self.assertRaisesRegex(web.WebError, '^sign_in_unavailable$'):
+            self.app.start_sign_in({'form_id': 'F01'})
+        app = web.WebApp(self.root / 'private-config', self.root / 'private-state', self.root / 'private-profile',
+                         mode='private', installed_root=self.root / 'installed')
+        with patch.object(web, 'verify_installation'):
+            with self.assertRaisesRegex(web.WebError, '^form_not_configured$'):
+                app.start_sign_in({'form_id': 'missing'})
+
+    def test_readiness_calendar_summary_is_sanitized(self):
+        summary = self.app.readiness()['calendar_summary']
+        self.assertEqual(summary['coverage_start'], web.today().isoformat())
+        self.assertEqual(summary['coverage_end'], web.today().isoformat())
+        self.assertEqual(summary['school_day_count'], 1)
+        self.assertNotIn('source', summary)
+        self.assertNotIn('path', summary)
+
+    def test_schedule_pause_and_review_before_opt_in(self):
+        code, paused, _ = self.request('POST', '/api/forms/F01/schedule', {'scheduled': False})
+        self.assertEqual(code, 200)
+        self.assertFalse(paused['scheduled'])
+        self.request('PUT', '/api/forms/F01', {'answers': dict(paused['answers'], q0='New example')})
+        self.assertEqual(self.request('POST', '/api/forms/F01/schedule', {'scheduled': True, 'review_token': paused['review_token']})[0], 409)
+        changed = self.app.form('F01')
+        self.request('POST', '/api/forms/F01/approve', {'review_token': changed['review_token']})
+        self.assertEqual(self.request('POST', '/api/forms/F01/schedule', {'scheduled': True, 'review_token': changed['review_token']})[0], 200)
+
+    def test_new_template_is_unscheduled_and_refresh_preserves_answers(self):
+        url = 'https://forms.office.com/Pages/ResponsePage.aspx?id=synthetic-template'
+        _, inspected, _ = self.request('POST', '/api/forms/inspect', {'url': url})
+        _, created, _ = self.request('POST', '/api/forms', {'name': 'Template example', 'url': url,
+            'inspect_token': inspected['inspect_token'], 'answers': {'q0': 'Example', 'q1': 'Option A'}})
+        self.assertFalse(created['scheduled'])
+        _, refreshed, _ = self.request('POST', '/api/forms/inspect', {'url': url, 'form_id': created['id']})
+        self.assertEqual(refreshed['answers']['q0'], 'Example')
+        self.assertEqual(refreshed['answers']['q1'], 'Option A')
+        self.request('POST', '/api/run', {})
+        self.assertIsNone(web.StateStore(self.app.state_dir, web.today()).read(created['id']))
+
+    def test_today_has_stable_school_day_schedule(self):
+        _, first, _ = self.request('GET', '/api/today')
+        _, second, _ = self.request('GET', '/api/today')
+        self.assertEqual([item['scheduled_time'] for item in first['items']], [item['scheduled_time'] for item in second['items']])
+        self.assertEqual(first['schedule_window'], '12:00–15:30 America/Chicago')
+
+    def test_submit_one_unscheduled_form_without_running_others_or_enrolling(self):
+        self.request('POST', '/api/forms/F01/schedule', {'scheduled': False})
+        with patch.object(web.BrowserSession, '__enter__', side_effect=AssertionError('demo browser')):
+            code, result, _ = self.request('POST', '/api/forms/F01/submit', {})
+        self.assertEqual(code, 200)
+        self.assertTrue(result['submitted'])
+        self.assertFalse(result['form']['scheduled'])
+        self.assertFalse(result['form']['can_submit'])
+        state = web.StateStore(self.app.state_dir, web.today())
+        self.assertEqual(state.read('F01')['status'], 'submitted')
+        self.assertIsNone(state.read('F02'))
+        self.assertEqual(self.request('POST', '/api/forms/F01/submit', {})[0], 409)
+
+    def test_unreviewed_form_cannot_submit_or_launch_runner(self):
+        form = self.app.form('F01')
+        self.request('PUT', '/api/forms/F01', {'answers': dict(form['answers'], q0='Changed example')})
+        with patch.object(web.subprocess, 'run', side_effect=AssertionError('runner must not launch')):
+            code, result, _ = self.request('POST', '/api/forms/F01/submit', {})
+        self.assertEqual(code, 409)
+        self.assertEqual(result['error']['code'], 'review_answers_before_submitting')
+
+    def test_claimed_or_uncertain_form_cannot_be_resubmitted_manually(self):
+        from outputs.formfiller.state import _atomic_json
+        state = web.StateStore(self.app.state_dir, web.today())
+        _atomic_json(state.day_dir / 'schedule.json', {'claimed': ['F01']})
+        self.assertFalse(self.app.form('F01')['can_submit'])
+        self.assertEqual(self.request('POST', '/api/forms/F01/submit', {})[0], 409)
+        state.bind_config('F02', web._config_fingerprint(self.app.store.get_form('F02')))
+        state.transition('F02', 'pending', 'submitting')
+        state.transition('F02', 'submitting', 'uncertain')
+        self.assertEqual(self.request('POST', '/api/forms/F02/submit', {})[0], 409)
+
+    def test_private_selected_submission_verifies_snapshot_and_uses_runner_lock(self):
+        from types import SimpleNamespace
+        self.app.mode = 'private'
+        self.app.installed_root = self.root / 'synthetic-installed'
+        def run_child(*args, **kwargs):
+            state = web.StateStore(self.app.state_dir, web.today())
+            # The parent must release the file lock before starting the child.
+            with state.lock():
+                state.bind_config('F01', web._config_fingerprint(self.app.store.get_form('F01')))
+                state.transition('F01', 'pending', 'submitting')
+                state.transition('F01', 'submitting', 'submitted')
+            return SimpleNamespace(returncode=0, stdout=b'')
+        with patch.object(web, 'verify_installation') as verify, patch.object(web.subprocess, 'run', side_effect=run_child) as child:
+            code, result, _ = self.request('POST', '/api/forms/F01/submit', {})
+        self.assertEqual(code, 200)
+        verify.assert_called_once_with(self.app.installed_root)
+        self.assertEqual(child.call_args.args[0][-3:], ['--live', '--form', 'F01'])
+        self.assertTrue(result['submitted'])
+
+    def test_private_selected_submission_reports_calendar_blocker_without_leaking_output(self):
+        from types import SimpleNamespace
+        self.app.mode = 'private'
+        self.app.installed_root = self.root / 'synthetic-installed'
+        blocked = SimpleNamespace(returncode=2, stdout=b'error code=calendar_stale\nSYNTHETIC_PRIVATE_MARKER\n')
+        with patch.object(web, 'verify_installation'), patch.object(web.subprocess, 'run', return_value=blocked):
+            code, result, _ = self.request('POST', '/api/forms/F01/submit', {})
+        self.assertEqual(code, 409)
+        self.assertEqual(result['error']['code'], 'calendar_stale')
+        self.assertNotIn('SYNTHETIC_PRIVATE_MARKER', json.dumps(result))
+
+    def test_form_prefills_last_confirmed_answers_after_restart_and_on_next_day(self):
+        from datetime import timedelta
+        original = self.app.form('F01')['answers']
+        self.request('POST', '/api/forms/F01/submit', {})
+        restarted = web.WebApp(self.app.config_dir, self.app.state_dir, self.app.profile_dir)
+        with patch.object(web, 'today', return_value=web.today() + timedelta(days=1)):
+            form = restarted.form('F01')
+        self.assertEqual(form['answer_source'], 'last_submission')
+        self.assertEqual(form['answers'], original)
+        self.assertEqual(form['answers']['q2'], {'kind': 'date'})
+        self.assertTrue(form['can_submit'])
+        self.assertIsNotNone(form['last_submitted_on'])
+        self.assertIsNone(restarted.form('F02')['last_submitted_on'])
+
+    def test_unsent_edits_preserved_and_last_submission_stays_private(self):
+        self.request('POST', '/api/forms/F01/submit', {})
+        old = self.app.form('F01')
+        _, saved, _ = self.request('PUT', '/api/forms/F01', {'answers': dict(old['answers'], q0='Unsent synthetic draft')})
+        self.assertEqual(saved['answer_source'], 'saved_changes')
+        self.assertEqual(saved['answers']['q0'], 'Unsent synthetic draft')
+        snapshot = self.app.store.get_form('F01')['last_submission']
+        self.assertEqual(snapshot['answers'][0]['value'], 'Example answer')
+        runtime_contents = '\n'.join(path.read_text() for path in self.app.state_dir.rglob('*.json'))
+        self.assertNotIn('Example answer', runtime_contents)
+        self.assertNotIn('Unsent synthetic draft', runtime_contents)
+
+    def test_schema_refresh_uses_last_submission_by_title_without_changing_approvals(self):
+        from copy import deepcopy
+        original = self.app.store.get_form('F01')
+        effective = deepcopy(original)
+        effective['schema']['questions'].reverse()
+        effective['answers'].reverse()
+        self.app.store.record_submission('F01', effective, web.today(), web._config_fingerprint(original))
+        _, refreshed, _ = self.request('POST', '/api/forms/inspect', {'url': original['url'], 'form_id': 'F01'})
+        self.assertEqual(refreshed['answers']['q0'], 'Example answer')
+        self.assertEqual(refreshed['answers']['q1'], 'Option A')
+        self.assertFalse(self.app.form('F01')['review_required'])
+
     def setup_picker(self):
         install = self.root / 'installed'
         install.mkdir()
