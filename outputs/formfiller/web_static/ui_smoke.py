@@ -147,10 +147,15 @@ def main() -> None:
                 page.get_by_role("button", name="Inspect form").click()
                 page.locator("#dialog-notice").get_by_text("Paste a form URL to continue.").wait_for()
                 capture("form-details-error")
-                page.locator("#form-name").fill("Smoke added form")
                 page.locator("#form-url").fill("https://forms.office.com/Pages/ResponsePage.aspx?id=synthetic-smoke")
                 page.get_by_role("button", name="Inspect form").click()
                 page.locator("#answers-step").wait_for(state="visible")
+                assert page.locator("#form-name").input_value() == "Synthetic sample form"  # blank name takes the form title
+                page.get_by_role("button", name="Back").click()
+                page.locator("#form-name").fill("Smoke added form")
+                page.get_by_role("button", name="Inspect form").click()
+                page.locator("#answers-step").wait_for(state="visible")
+                assert page.locator("#form-name").input_value() == "Smoke added form"
                 capture("form-answers-dialog")
                 page.get_by_role("button", name="Save form").click()
                 page.locator('#dialog-notice').wait_for(state='visible')

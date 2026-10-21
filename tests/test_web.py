@@ -61,6 +61,7 @@ class WebTests(unittest.TestCase):
 
         form = by_id['F04']
         _, inspected, _ = self.request('POST', '/api/forms/inspect', {'url': form['url'], 'form_id': 'F04'})
+        self.assertEqual(inspected['title'], 'Synthetic sample form')
         code, saved, _ = self.request('PUT', '/api/forms/F04', {'name': form['name'], 'url': form['url'],
             'answers': inspected['answers'], 'inspect_token': inspected['inspect_token']})
         self.assertEqual(code, 200)

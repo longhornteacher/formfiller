@@ -292,17 +292,20 @@
   document.querySelector('#inspect-button').addEventListener('click', async event => {
     clearNotice();
     const button = event.currentTarget;
-    const name = document.querySelector('#form-name').value.trim() || 'New form template';
+    const typedName = document.querySelector('#form-name').value.trim();
     const url = document.querySelector('#form-url').value.trim();
     if (!url) { showNotice('Paste a form URL to continue.', 'error'); return; }
     buttonBusy(button, true, 'Inspecting…');
     try {
-      const result = await request('/api/forms/inspect', {method:'POST', body:{name,url, form_id:state.editingId}});
+      const result = await request('/api/forms/inspect', {method:'POST', body:{name:typedName, url, form_id:state.editingId}});
+      // A blank name takes the form's own title; a name the teacher typed always wins.
+      const name = typedName || result.title || 'New form template';
+      document.querySelector('#form-name').value = name;
       state.inspection = {...result, name, url};
       document.querySelector('#details-step').hidden = true;
       document.querySelector('#answers-step').hidden = false;
       document.querySelector('#dialog-title').textContent = 'Configure answers';
-      document.querySelector('#inspection-summary').textContent = (count => `${count} ${count === 1 ? 'question' : 'questions'} found. Fill in your answers and save; you’ll review them once more before the form can run.${result.schema.questions.some(q => q.type === 'unsupported') ? ' Some questions use a type FormFiller can’t fill yet and are marked below.' : ''}`)(Array.isArray(result.schema?.questions) ? result.schema.questions.length : 0);
+      document.querySelector('#inspection-summary').textContent = (count => `${result.title ? `“${result.title}” · ` : ''}${count} ${count === 1 ? 'question' : 'questions'} found. Fill in your answers and save; you’ll review them once more before the form can run.${result.schema.questions.some(q => q.type === 'unsupported') ? ' Some questions use a type FormFiller can’t fill yet and are marked below.' : ''}`)(Array.isArray(result.schema?.questions) ? result.schema.questions.length : 0);
       document.querySelector('#save-form-button').textContent = 'Save form';
       renderAnswerFields(result.schema || {questions:[]}, result.answers || {});
       updateSteps(2);

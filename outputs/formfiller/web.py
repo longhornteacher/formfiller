@@ -368,13 +368,14 @@ class WebApp:
         BrowserSession._validate_url(url)
         with self.editing():
             if self.mode == "demo":
-                schema = sample_schema()
+                schema, form_title = sample_schema(), "Synthetic sample form"
             else:
                 self.calendar()  # Missing, changed, stale, or uncovered dates stop before Edge opens.
                 settings = self.settings()
                 settings["browser_profile_path"] = str(self.profile_dir.resolve())
                 with BrowserSession(settings) as browser:
                     schema = browser.inspect({"alias": "inspection", "url": url})
+                    form_title = browser.form_title({"alias": "inspection", "url": url})
             token = secrets.token_urlsafe(24)
             self.inspections[token] = (time.monotonic() + 600, url, schema)
         answers = {}
@@ -395,7 +396,7 @@ class WebApp:
                         value = ([v for v in value if v in field["options"]] if isinstance(value, list)
                                  else value if value in field["options"] else "")
                     answers[field["id"]] = value
-        return {"schema": normalized_schema(schema), "answers": answers,
+        return {"schema": normalized_schema(schema), "answers": answers, "title": form_title,
                 "inspect_token": token, "review_required": True}
 
     def schedule_form(self, form_id, payload):
