@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import monitor, runner
+from . import monitor, runner, scheduling
 from .workspace import WorkspaceError, resolve_workspace
 from .deployment import DeploymentError, validate_snapshot
 
@@ -67,7 +67,8 @@ def main(argv=None, *, root=ROOT):
         except DeploymentError as exc:
             print(f'error code={exc.code}', flush=True)
             return runner.EXIT_CONFIG
-    day = datetime.now(ZoneInfo('America/Chicago')).date().isoformat()
+    scheduling.apply_from_config(workspace.config_dir)
+    day = scheduling.now().date().isoformat()
     run_code = 0
     if not args.check_only:
         run_code = runner.run([

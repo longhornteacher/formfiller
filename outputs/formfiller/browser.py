@@ -100,7 +100,7 @@ class BrowserSession:
             # This directory is dedicated to this runner, never an everyday profile.
             self.context = self.pw.chromium.launch_persistent_context(
                 str(profile), channel='msedge', headless=False,
-                accept_downloads=False, locale='en-US', timezone_id='America/Chicago',
+                accept_downloads=False, locale='en-US', timezone_id=str(self.config.get('time_zone') or 'America/Chicago'),
                 viewport={'width': 1280, 'height': 900},
             )
             self.context.set_default_timeout(15000)

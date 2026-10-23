@@ -118,7 +118,7 @@ def _forms(path: Path) -> list[dict[str, Any]]:
 
 
 def _today() -> date:
-    return datetime.now(ZoneInfo("America/Chicago")).date()
+    return scheduling.now().date()
 
 
 def _migration_in_progress(root: Path) -> bool:
@@ -265,6 +265,7 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
             raise ValueError("settings_config")
         if not isinstance(settings.get("calendar_path", "calendar.json"), str):
             raise ValueError("settings_config")
+        scheduling.apply(settings)
     except ValueError as exc:
         _emit(f"error code={exc}")
         return EXIT_CONFIG
@@ -362,6 +363,7 @@ def run(argv: Sequence[str] | None = None, *, project_root: Path | str | None = 
                     or type(settings.get("max_calendar_age_days", 14)) is not int
                     or settings.get("max_calendar_age_days", 14) < 0):
                 raise ValueError("settings_config")
+            scheduling.apply(settings)
             if login_alias and not any(form["alias"] == login_alias for form in forms):
                 raise ValueError("unknown_alias")
             if inspect_alias not in (None, "*") and not any(form["alias"] == inspect_alias for form in forms):

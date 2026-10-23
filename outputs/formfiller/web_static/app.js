@@ -6,7 +6,7 @@
   const confirmDialog = document.querySelector('#confirm-dialog');
   const setupForm = document.querySelector('#form-setup');
   const state = { course: '', csrf: '', view: 'forms', forms: [], search: '', selectedId: null, removeId: null, inspection: null, session: {}, skyward: null, skywardCourses: [] };
-  const viewNames = { forms: 'Forms', today: 'Today', attendance: 'Attendance Preview', history: 'History', readiness: 'Readiness', setup: 'Setup', guide: 'Teacher Guide', skyward: 'Skyward' };
+  const viewNames = { forms: 'Forms', today: 'Today', attendance: 'Attendance Preview', history: 'History', readiness: 'Readiness', setup: 'Setup', settings: 'Settings', guide: 'Teacher Guide', skyward: 'Skyward' };
   const safeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const dateLabel = value => value ? safeText(value) : '—';
   const shortDate = iso => {
@@ -49,6 +49,9 @@
     if (!response.ok) {
       const error = data?.error;
       const messages = {
+        settings_window_invalid: 'Choose a start time that is earlier than the end time.',
+        settings_time_zone_invalid: 'That time zone is not recognized. Use a name like America/Chicago.',
+        settings_field_unknown: 'Only the submit window and time zone can be changed here.',
         answers_invalid: 'Choose valid answers for the current questions. Required questions must be answered.',
         required_answer_missing: 'Fill in every required question before saving.',
         review_answers_before_scheduling: 'Save and review this template’s answers before adding it to the schedule.',
@@ -93,6 +96,7 @@
   const loadView = async () => {
     if (state.view === 'forms') return loadForms();
     if (state.view === 'setup') return renderSetup();
+    if (state.view === 'settings') return renderSettings();
     if (state.view === 'guide') return renderGuide();
     if (state.view === 'skyward') return loadSkyward();
     const data = await request(`/api/${state.view}`);
@@ -592,6 +596,36 @@
       try { await request('/api/sign-in',{method:'POST',body:{form_id:root.querySelector('#signin-form').value}}); showNotice('The dedicated Edge profile opened. Sign in manually; this does not verify authentication.','info'); }
       catch (_) { showNotice('The sign-in window could not be opened. Check local readiness and try again.','error'); }
       finally { button.disabled=false; button.textContent='Open dedicated Edge sign-in'; }
+    });
+  };
+  const renderSettings = async () => {
+    const data = await request('/api/settings/window');
+    root.innerHTML = `<div class="page-heading"><div><h1>Settings</h1><p>Choose the time window for scheduled submissions. Saving never submits anything, turns on live mode, or approves anything.</p></div></div>
+      <form id="window-settings" class="notice-box" novalidate>
+        <label class="field-label" for="window-start">Submit window starts</label><input id="window-start" type="time" required value="${safeText(data.submit_window_start)}">
+        <label class="field-label" for="window-end">Submit window ends</label><input id="window-end" type="time" required value="${safeText(data.submit_window_end)}">
+        <label class="field-label" for="window-zone">Time zone</label><input id="window-zone" autocomplete="off" required value="${safeText(data.time_zone)}" placeholder="America/Chicago">
+        <p class="helper-text">Default: ${safeText(data.defaults.submit_window_start)} to ${safeText(data.defaults.submit_window_end)}, ${safeText(data.defaults.time_zone)}. Scheduled forms run at a random time inside this window on school days.</p>
+        <div class="dialog-actions"><button type="button" class="button secondary" id="window-reset">Restore defaults</button><button type="submit" class="button primary" id="window-save">Save settings</button></div>
+      </form>`;
+    const form = root.querySelector('#window-settings');
+    root.querySelector('#window-reset').addEventListener('click', () => {
+      root.querySelector('#window-start').value = data.defaults.submit_window_start;
+      root.querySelector('#window-end').value = data.defaults.submit_window_end;
+      root.querySelector('#window-zone').value = data.defaults.time_zone;
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = root.querySelector('#window-save');
+      buttonBusy(button, true);
+      try {
+        const result = await request('/api/settings/window', {method:'PUT', body:{
+          submit_window_start: root.querySelector('#window-start').value,
+          submit_window_end: root.querySelector('#window-end').value,
+          time_zone: root.querySelector('#window-zone').value.trim()}});
+        showNotice(result.saved ? 'Settings saved. Scheduled tasks were refreshed; nothing was submitted.' : 'Settings are already up to date.', 'success');
+      } catch (error) { showNotice(error.message, 'error'); }
+      finally { buttonBusy(button, false); }
     });
   };
   const renderGuide = () => {
