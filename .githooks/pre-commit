@@ -1,11 +1,15 @@
 #!/bin/sh
 set -eu
-if [ -x outputs/.venv/Scripts/python.exe ]; then
-    exec outputs/.venv/Scripts/python.exe -m tools.audit_privacy --staged
-elif [ -x outputs/.venv/bin/python ]; then
-    exec outputs/.venv/bin/python -m tools.audit_privacy --staged
-elif command -v python3 >/dev/null 2>&1; then
-    exec python3 -m tools.audit_privacy --staged
-else
-    exec python -m tools.audit_privacy --staged
-fi
+# Use the first interpreter that actually runs; a venv copied from another
+# account or machine can exist yet be unusable.
+for candidate in outputs/.venv/Scripts/python.exe outputs/.venv/bin/python python3 python py; do
+    case "$candidate" in
+        outputs/*) [ -x "$candidate" ] || continue ;;
+        *) command -v "$candidate" >/dev/null 2>&1 || continue ;;
+    esac
+    if "$candidate" -c "import sys" >/dev/null 2>&1; then
+        exec "$candidate" -m tools.audit_privacy --staged
+    fi
+done
+echo "audit_privacy: no working Python interpreter found" >&2
+exit 1
