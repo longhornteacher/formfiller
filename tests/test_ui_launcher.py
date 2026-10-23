@@ -32,8 +32,17 @@ class WebUILauncherTests(unittest.TestCase):
         self.app = self.local / 'FormFiller'
         self.app.mkdir(parents=True)
 
-    def launch(self):
-        return subprocess.run([self.shell, '-NoProfile', '-File', str(LAUNCHER),
+    def isolate_launcher(self):
+        """Run a copy of the launcher beside a fake bootstrap so no real installer can run."""
+        shutil.copy(LAUNCHER, self.repo / 'tools' / 'Launch-WebUI.ps1')
+        (self.repo / 'tools' / 'Bootstrap-WebUI.ps1').write_text("""param($RepositoryRoot,$AppDataRoot)
+function Test-FormFillerPython { param($Executable) return $false }
+function Resolve-FormFillerPython { param($DependencyRoot,[switch]$NoInstall) return 'C:\\synthetic\\python.exe' }
+""")
+        return self.repo / 'tools' / 'Launch-WebUI.ps1'
+
+    def launch(self, launcher=LAUNCHER):
+        return subprocess.run([self.shell, '-NoProfile', '-File', str(launcher),
             '-RepositoryRoot', str(self.repo), '-AppDataRoot', str(self.local)],
             capture_output=True, text=True, timeout=30)
 
@@ -60,7 +69,7 @@ New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 @'
 """ + STUB_UI + """'@ | Set-Content (Join-Path $Destination 'Run-FormFillerPrivate.ps1')
 """)
-        result = self.launch()
+        result = self.launch(self.isolate_launcher())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         installed = list((self.app / 'App').glob('snapshot-ui-*'))
         self.assertEqual(len(installed), 1)
