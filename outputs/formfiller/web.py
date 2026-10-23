@@ -41,7 +41,7 @@ class WebError(Exception):
 
 
 def today():
-    return datetime.now(ZoneInfo("America/Chicago")).date()
+    return scheduling.now().date()
 
 
 def read_json(path, code="data_unavailable"):
@@ -198,6 +198,7 @@ class WebApp:
         # Student names stay in memory only; nothing here is persisted.
         self.roster, self.marks, self.attendance_date, self.attendance_submitted = [], {}, None, False
         self.course_id = None
+        scheduling.apply_from_config(self.config_dir)
 
     @contextmanager
     def editing(self):
@@ -307,7 +308,7 @@ class WebApp:
             can_run = can_run and checks["ready"]
         return {"date": today().isoformat(), "items": items, "counts": counts, "expected": len(items),
                 "mode": self.mode, "can_run": can_run, "schedule_code": schedule_code,
-                "schedule_window": "12:00–15:30 America/Chicago"}
+                "schedule_window": scheduling.window_label()}
 
     def history(self):
         items = []
@@ -469,11 +470,45 @@ class WebApp:
                     results.append({"id": form["id"], "state": "current" if current else "changed"})
         return {"results": results, "forms": self.forms()}
 
-    def sync_tasks(self):
+    def window_settings(self):
+        try:
+            start, end, zone, _ = scheduling.parse_window(self.settings())
+        except ValueError:
+            start, end, zone = (scheduling._minutes(scheduling.DEFAULT_START),
+                                scheduling._minutes(scheduling.DEFAULT_END), scheduling.DEFAULT_ZONE)
+        return {"submit_window_start": f"{start // 60:02d}:{start % 60:02d}",
+                "submit_window_end": f"{end // 60:02d}:{end % 60:02d}", "time_zone": zone,
+                "defaults": {"submit_window_start": scheduling.DEFAULT_START,
+                             "submit_window_end": scheduling.DEFAULT_END, "time_zone": scheduling.DEFAULT_ZONE}}
+
+    def save_window_settings(self, payload):
+        """Persist only the submit window and time zone. Never touches live mode or approvals."""
+        if self.needs_setup:
+            raise WebError("workspace_required", 409)
+        keys = ("submit_window_start", "submit_window_end", "time_zone")
+        if set(payload) - set(keys):
+            raise WebError("settings_field_unknown")
+        with self.editing():
+            settings = self.settings()
+            candidate = dict(settings)
+            candidate.update({key: payload[key] for key in keys if key in payload})
+            try:
+                scheduling.parse_window(candidate)
+            except ValueError as exc:
+                raise WebError(str(exc)) from None
+            changed = {key: candidate.get(key) for key in keys} != {key: settings.get(key) for key in keys}
+            if changed:
+                settings.update({key: candidate[key] for key in keys if key in candidate})
+                _atomic_json(self.config_dir / "settings.json", settings)
+            scheduling.apply(settings)
+        sync = self.sync_tasks(refresh_planner=True) if changed else None
+        return {**self.window_settings(), "saved": changed, "tasks": sync}
+
+    def sync_tasks(self, refresh_planner=False):
         """Refresh today's one-shot tasks after a schedule change; never blocks the edit."""
         if self.mode != "private" or self.needs_setup:
             return None
-        return taskplan.sync_for_ui(self.config_dir, self.state_dir)
+        return taskplan.sync_for_ui(self.config_dir, self.state_dir, refresh_planner=refresh_planner)
 
     def mutate_form(self, payload, form_id=None):
         if self.needs_setup:
@@ -879,7 +914,8 @@ class Handler(BaseHTTPRequestHandler):
             routes = {"/api/session": lambda: {"csrf_token": app.token, "mode": app.mode, "needs_setup": app.needs_setup},
                       "/api/forms": lambda: {"forms": app.forms()}, "/api/today": app.status,
                       "/api/history": app.history, "/api/attendance": app.attendance, "/api/readiness": app.readiness,
-                      "/api/sync": app.sync, "/api/skyward/config": app.skyward_settings}
+                      "/api/sync": app.sync, "/api/skyward/config": app.skyward_settings,
+                      "/api/settings/window": app.window_settings}
             if path in routes:
                 return self.respond(200, routes[path]())
             if path.startswith("/api/forms/"):
@@ -927,6 +963,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, app.start_sign_in(payload))
         if self.command == "PUT" and path == "/api/skyward/config":
             return self.respond(200, app.replace_skyward_config(payload))
+        if self.command == "PUT" and path == "/api/settings/window":
+            return self.respond(200, app.save_window_settings(payload))
         if self.command == "POST" and path == "/api/sync/check":
             return self.respond(200, app.sync())
         if self.command == "POST" and path == "/api/run":

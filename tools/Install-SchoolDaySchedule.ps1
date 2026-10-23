@@ -45,7 +45,7 @@ $setupMode = if ($AllowUnconfigured) { 'allow_unconfigured' } else { 'configured
 & $python -c $validation $snapshotFull $setupMode
 if ($LASTEXITCODE -ne 0) { throw 'Schedule prerequisites failed.' }
 # One planner task runs each morning (and at sign-in, idempotently). It picks
-# each template's random time in 12:00-15:30 Central, deletes yesterday's plan
+# each template's random time in the configured submit window, deletes yesterday's plan
 # and leftover tasks, and registers one run-once task per slot. All launches use
 # pythonw.exe, so no console window appears. The old minute-by-minute task is
 # removed. TaskName is retained only for the -WhatIf message.
@@ -53,5 +53,5 @@ if ($PSCmdlet.ShouldProcess($TaskName, 'Install the daily planner and remove the
     Push-Location -LiteralPath $snapshotFull
     try { & $python -B -m formfiller.taskplan install-planner } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw 'Planner registration failed.' }
-    Write-Output 'status=schedule_installed planner=daily window=12:00-15:30 timezone=America/Chicago'
+    Write-Output 'status=schedule_installed planner=daily window=configured'
 }

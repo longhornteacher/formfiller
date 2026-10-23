@@ -9,6 +9,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from . import scheduling
 from .calendar import CalendarError, load_calendar
 from .workspace import WorkspaceError, resolve_workspace
 
@@ -57,8 +58,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--calendar", type=Path, default=paths.config_dir / "calendar.json")
     parser.add_argument("--forms", type=Path, default=paths.config_dir / "forms.json")
     parser.add_argument("--state-dir", type=Path, default=paths.state_dir)
-    parser.add_argument("--after", type=time.fromisoformat, default=time(15, 30), metavar="HH:MM",
-                        help="Chicago local time after which a school-day run is expected (default: 15:30)")
+    parser.add_argument("--after", type=time.fromisoformat, default=None, metavar="HH:MM",
+                        help="local time (configured zone) after which a run is expected (default: end of submit window)")
     parser.add_argument("--max-calendar-age-days", type=int, default=14)
     parser.add_argument("--date", dest="date_override", type=date.fromisoformat, metavar="YYYY-MM-DD",
                         help="date to inspect; defaults to today in America/Chicago")
@@ -74,14 +75,16 @@ def main(argv=None) -> int:
     if args.max_calendar_age_days < 0:
         print("ERROR: max calendar age must be non-negative", file=sys.stderr)
         return 2
-    today = args.date_override or datetime.now(CHICAGO).date()
+    scheduling.apply_from_config(args.calendar.parent)
+    after = args.after or time(scheduling.END // 60, scheduling.END % 60)
+    today = args.date_override or scheduling.now().date()
     try:
         is_school_day = load_calendar(args.calendar, today, max_age_days=args.max_calendar_age_days)
         if not is_school_day:
             print(f"{today.isoformat()}: no run expected (not a listed instructional day)")
             return 0
-        if datetime.now(CHICAGO).time().replace(tzinfo=None) < args.after and args.date_override is None:
-            print(f"{today.isoformat()}: run not due yet; expected after {args.after.strftime('%H:%M')} America/Chicago")
+        if scheduling.now().time().replace(tzinfo=None) < after and args.date_override is None:
+            print(f"{today.isoformat()}: run not due yet; expected after {after.strftime('%H:%M')} {scheduling.ZONE_NAME}")
             return 0
         # Read only stable safe IDs and active flags; private names, URLs, and answers
         # are never displayed or used by the status checker.

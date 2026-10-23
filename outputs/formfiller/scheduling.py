@@ -9,9 +9,67 @@ from zoneinfo import ZoneInfo
 
 from .state import StateError, _atomic_json
 
-ZONE = ZoneInfo("America/Chicago")
+DEFAULT_ZONE = "America/Chicago"
+DEFAULT_START = "12:00"
+DEFAULT_END = "15:30"
+ZONE = ZoneInfo(DEFAULT_ZONE)
+ZONE_NAME = DEFAULT_ZONE
 START = 12 * 60
 END = 15 * 60 + 30
+
+
+def _minutes(value):
+    if not isinstance(value, str) or len(value) != 5 or value[2] != ":" or not (value[:2] + value[3:]).isdigit():
+        raise ValueError("settings_window_invalid")
+    hour, minute = int(value[:2]), int(value[3:])
+    if hour > 23 or minute > 59:
+        raise ValueError("settings_window_invalid")
+    return hour * 60 + minute
+
+
+def parse_window(settings):
+    """Validate the submit window keys of settings.json; missing keys use the defaults.
+
+    Returns (start_minute, end_minute, zone_name, ZoneInfo). Raises ValueError with
+    a fixed code. Pure: it never changes the module's active window.
+    """
+    start = _minutes(settings.get("submit_window_start", DEFAULT_START))
+    end = _minutes(settings.get("submit_window_end", DEFAULT_END))
+    if start >= end:
+        raise ValueError("settings_window_invalid")
+    name = settings.get("time_zone", DEFAULT_ZONE)
+    if not isinstance(name, str) or not name or name != name.strip() or name.startswith(("/", ".")) or ".." in name:
+        raise ValueError("settings_time_zone_invalid")
+    try:
+        zone = ZoneInfo(name)
+    except Exception:
+        raise ValueError("settings_time_zone_invalid") from None
+    return start, end, name, zone
+
+
+def apply(settings):
+    """Make a validated window the active one for this process."""
+    global ZONE, ZONE_NAME, START, END
+    START, END, ZONE_NAME, ZONE = parse_window(settings)
+
+
+def apply_from_config(config_dir):
+    """Best effort for entry points that only need the window: defaults on any problem."""
+    import json
+    from pathlib import Path
+    try:
+        settings = json.loads((Path(config_dir) / "settings.json").read_text(encoding="utf-8"))
+        apply(settings if isinstance(settings, dict) else {})
+    except (OSError, ValueError):
+        apply({})
+
+
+def _clock(minute):
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def window_label():
+    return f"{_clock(START)}–{_clock(END)} {ZONE_NAME}"
 
 
 def now():
@@ -30,9 +88,12 @@ def plan(store, forms, instant):
             or not isinstance(data.get("slots"), dict) or not isinstance(data.get("claimed"), list)):
         raise StateError("schedule_invalid")
     slots = data["slots"]
-    if (any(not isinstance(k, str) or type(v) is not int or not START <= v < END for k, v in slots.items())
+    if (any(not isinstance(k, str) or type(v) is not int or not 0 <= v < 24 * 60 for k, v in slots.items())
             or any(not isinstance(alias, str) for alias in data["claimed"])):
         raise StateError("schedule_invalid")
+    # A settings change can move the window mid-day: unclaimed slots outside it are re-planned.
+    for alias in [k for k, v in slots.items() if not START <= v < END and k not in data["claimed"]]:
+        del slots[alias]
     minute = instant.hour * 60 + instant.minute
     first = max(START, minute + (1 if minute >= START else 0))
     missing = [form["alias"] for form in forms if enabled(form) and form["alias"] not in slots]

@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLANNER = "\\FormFiller\\Daily Plan"
 RUN_PREFIX = "\\FormFiller\\Run "
 LEGACY = "FormFiller Daily 3PM"
-PLANNER_CENTRAL_MINUTE = 6 * 60
+PLANNER_MINUTE = 6 * 60
 LOCK_WAIT_SECONDS = 20 * 60
 LOCK_POLL_SECONDS = 15
 LOG_LIMIT = 256 * 1024
@@ -52,8 +52,13 @@ def _user() -> str:
     return f"{domain}\\{name}" if domain and name else (name or "")
 
 
+def planner_minute() -> int:
+    """Wall-clock minute (configured zone) for the morning plan; never later than 30 min before the window."""
+    return min(PLANNER_MINUTE, max(0, scheduling.START - 30))
+
+
 def central_to_local(day, minute: int) -> datetime:
-    """A Central wall-clock minute on `day`, as naive local time for Task Scheduler."""
+    """A wall-clock minute in the configured time zone on `day`, as naive local time for Task Scheduler."""
     central = datetime(day.year, day.month, day.day, tzinfo=scheduling.ZONE) + timedelta(minutes=minute)
     return central.astimezone().replace(tzinfo=None, second=0, microsecond=0)
 
@@ -99,13 +104,13 @@ def run_task_xml(when: datetime, end: datetime, python, snapshot) -> str:
 
 
 def planner_task_xml(day, python, snapshot) -> str:
-    start = central_to_local(day, PLANNER_CENTRAL_MINUTE)
+    start = central_to_local(day, planner_minute())
     user = escape(_user())
     triggers = (f"<CalendarTrigger><StartBoundary>{_iso(start)}</StartBoundary><Enabled>true</Enabled>"
                 "<ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>"
                 f"<LogonTrigger><Enabled>true</Enabled><Delay>PT2M</Delay>"
                 f"{f'<UserId>{user}</UserId>' if user else ''}</LogonTrigger>")
-    return _task("FormFiller: plans today's randomized template times (12:00-15:30 Central). Submits nothing.",
+    return _task("FormFiller: plans today's randomized template times within the configured submit window. Submits nothing.",
                  triggers, _settings(), str(windowless_python(python)),
                  "-B -m formfiller.taskplan plan", str(snapshot))
 
@@ -174,11 +179,13 @@ def sync_today(config_dir, state_dir, *, scheduler=None, python=None, snapshot=N
     scheduler = scheduler or Scheduler()
     python = python or sys.executable
     snapshot = Path(snapshot or ROOT)
-    instant = instant or scheduling.now()
     config_dir, state_dir = Path(config_dir), Path(state_dir)
-    today = instant.date()
     try:
         settings = runner._load_json(config_dir / "settings.json", "settings_config")
+        if isinstance(settings, dict):
+            scheduling.apply(settings)
+        instant = (instant or scheduling.now()).astimezone(scheduling.ZONE)
+        today = instant.date()
         forms = [form for form in runner._forms(config_dir / "forms.json") if scheduling.enabled(form)]
         if not isinstance(settings, dict) or settings.get("live_enabled", False) is not True:
             scheduler.clear_run_tasks()
@@ -207,7 +214,8 @@ def sync_today(config_dir, state_dir, *, scheduler=None, python=None, snapshot=N
     return {"code": "planned", "tasks": replace_run_tasks(scheduler, today, minutes, instant, python, snapshot)}
 
 
-def sync_for_ui(config_dir, state_dir, *, scheduler=None, attempts=5, pause=2.0, sleep=time.sleep):
+def sync_for_ui(config_dir, state_dir, *, scheduler=None, attempts=5, pause=2.0, sleep=time.sleep,
+                refresh_planner=False):
     """Best-effort refresh after the WebUI changes a template's schedule.
 
     Only the designated installed snapshot may register tasks, so development
@@ -219,6 +227,13 @@ def sync_for_ui(config_dir, state_dir, *, scheduler=None, attempts=5, pause=2.0,
             return {"code": "not_installed_snapshot", "tasks": 0}
     except WorkspaceError:
         return {"code": "workspace_required", "tasks": 0}
+    if refresh_planner:
+        # A changed window or time zone moves the planner's own trigger; re-register it.
+        try:
+            scheduling.apply_from_config(config_dir)
+            install_planner(scheduler=scheduler)
+        except Exception:
+            return {"code": "planner_refresh_failed", "tasks": 0}
     for attempt in range(attempts):
         try:
             return sync_today(config_dir, state_dir, scheduler=scheduler)
