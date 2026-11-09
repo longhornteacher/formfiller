@@ -20,7 +20,7 @@ from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from .browser import BrowserError, BrowserSession, answer_plan
-from .calendar import CalendarError, load_calendar
+from .calendar import CalendarError, default_calendar_summary, load_calendar, load_default_calendar
 from .runner import _config_fingerprint, _record_check, _schema_fingerprint, _remember_submission
 from .schema_changes import reconcile
 from .skyward import (MARKS, SkywardSession, demo_courses, demo_roster, load_config, staged_counts,
@@ -221,7 +221,13 @@ class WebApp:
         configured = Path(settings.get("calendar_path", "calendar.json"))
         path = configured if configured.is_absolute() else self.config_dir / configured
         try:
-            return load_calendar(path, today(), max_age_days=settings.get("max_calendar_age_days", 14))
+            try:
+                return load_calendar(path, today(), max_age_days=settings.get("max_calendar_age_days", 14))
+            except CalendarError as exc:
+                # Only an absent private calendar falls back to the built-in one.
+                if exc.code != "missing_calendar":
+                    raise
+            return load_default_calendar(today())
         except CalendarError as exc:
             raise WebError(exc.code) from None
 
@@ -231,6 +237,8 @@ class WebApp:
             settings = self.settings()
             configured = Path(settings.get("calendar_path", "calendar.json"))
             path = configured if configured.is_absolute() else self.config_dir / configured
+            if not path.exists():
+                return default_calendar_summary()
             document = read_json(path, "calendar_unavailable")
             from .calendar import _validate_document
             start, end, school_days, _non_school_days, _complete, _exported_at = _validate_document(document)

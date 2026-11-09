@@ -20,7 +20,7 @@ There is no installer to run. The agent clones the repository, reads `AGENTS.md`
 
 Double-click **Launch FormFiller** on your Desktop whenever you want to open it. The shortcut launches the local WebUI in your default browser without a terminal window and works independently of the downloaded source folder. If you close the folder picker without choosing a folder, the shortcut asks again next time; nothing is reinstalled. Asking the agent to install again reuses the current installation and repairs its shortcut, preserving unrelated shortcuts. It does not reset private data or silently upgrade an installed snapshot.
 
-On first use, choose a private workspace, add and review your form templates, and complete the Readiness checks. School-calendar review and dedicated Edge sign-in remain explicit user steps. Installation creates no approvals and submits no forms. The background task waits for workspace selection and all live prerequisites. If organization policy blocks software installation or scheduled tasks, the agent stops and reports that blocker so IT can resolve it.
+On first use, choose a private workspace, add and review your form templates, and complete the Readiness checks. A built-in school calendar is used by default, so no calendar setup is needed; dedicated Edge sign-in remains an explicit user step. Installation creates no approvals and submits no forms. The background task waits for workspace selection and all live prerequisites. If organization policy blocks software installation or scheduled tasks, the agent stops and reports that blocker so IT can resolve it.
 
 To update, ask the agent explicitly. It validates the current snapshot, installs a fresh one, and switches the launcher and scheduler while retaining the same private workspace, approvals, profile, and submission state; a failed switch restores the previous locator and an existing runner lock is never removed.
 
@@ -28,7 +28,7 @@ To update, ask the agent explicitly. It validates the current snapshot, installs
 
 Source repository: [longhornteacher/formfiller](https://github.com/longhornteacher/formfiller).
 
-Only source, documentation, synthetic tests, and the date-only district reference in `calendar/` belong in Git. Private form URLs, saved answers, observed schemas, browser authentication, configuration, run state, reports, credentials, and user-specific paths stay outside the commit set. The district calendar reference is permitted; it does not grant runtime approval or refresh production calendar dates.
+Only source, documentation, synthetic tests, and the date-only built-in calendar (`outputs/formfiller/default_calendar.py`) belong in Git. Private form URLs, saved answers, observed schemas, browser authentication, configuration, run state, reports, credentials, and user-specific paths stay outside the commit set. The built-in calendar is public date-only data; it never holds private provenance, and a private calendar always takes precedence.
 
 Enable the staged-file check in each clone:
 

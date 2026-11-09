@@ -10,7 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from . import scheduling
-from .calendar import CalendarError, load_calendar
+from .calendar import CalendarError, load_calendar, load_default_calendar
 from .workspace import WorkspaceError, resolve_workspace
 
 
@@ -79,7 +79,13 @@ def main(argv=None) -> int:
     after = args.after or time(scheduling.END // 60, scheduling.END % 60)
     today = args.date_override or scheduling.now().date()
     try:
-        is_school_day = load_calendar(args.calendar, today, max_age_days=args.max_calendar_age_days)
+        try:
+            is_school_day = load_calendar(args.calendar, today, max_age_days=args.max_calendar_age_days)
+        except CalendarError as exc:
+            # Only an absent private calendar falls back to the built-in one.
+            if getattr(exc, "code", None) != "missing_calendar":
+                raise
+            is_school_day = load_default_calendar(today)
         if not is_school_day:
             print(f"{today.isoformat()}: no run expected (not a listed instructional day)")
             return 0

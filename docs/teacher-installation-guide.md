@@ -27,9 +27,9 @@ Unsupported question types need attention in the form or its configuration. Form
 
 ## Calendar and school sign-in
 
-FormFiller only runs on dates covered as instructional by an approved, fresh district calendar. Missing, changed, stale, or out-of-coverage calendars stop work before a form opens. A weekday alone does not make a date an instructional day.
+FormFiller only runs on instructional dates. It ships with a built-in school calendar, so there is nothing to set up. Dates outside its coverage stop work before a form opens until FormFiller is updated. A weekday alone does not make a date an instructional day.
 
-The current setup screen can explain calendar blockers, but it does not approve or refresh a calendar. If it says the calendar needs review, ask the person who manages your FormFiller installation to complete the district calendar review through the approved process. Do not change calendar files or approval dates yourself.
+If your administrator gave you a private calendar of your own, it takes precedence. If it is changed, stale, or needs review, FormFiller stops and says so; ask the person who manages your installation. Do not change calendar files or approval dates yourself.
 
 School sign-in is manual in the dedicated Microsoft Edge profile. Opening the sign-in flow does not prove that sign-in succeeded; readiness remains unverified until the local runner checks it while opening a form.
 

@@ -35,13 +35,14 @@ except ImportError:  # pragma: no cover - lets packaging provide browser later
         BrowserSession = None  # type: ignore[assignment,misc]
 
 try:
-    from .calendar import CalendarError, load_calendar
+    from .calendar import CalendarError, load_calendar, load_default_calendar
 except ImportError:  # pragma: no cover
     try:
-        from calendar import CalendarError, load_calendar  # type: ignore[import-not-found]
+        from calendar import CalendarError, load_calendar, load_default_calendar  # type: ignore[import-not-found]
     except ImportError:  # pragma: no cover
         CalendarError = RuntimeError  # type: ignore[misc,assignment]
         load_calendar = None  # type: ignore[assignment,misc]
+        load_default_calendar = None  # type: ignore[assignment,misc]
 
 try:
     from .workspace import WorkspaceError, resolve_workspace
@@ -155,7 +156,14 @@ def _load_calendar(settings: dict[str, Any], config_dir: Path, today: date) -> b
     if load_calendar is None:
         raise ValueError("calendar_module")
     path = _calendar_path(settings, config_dir)
-    return bool(load_calendar(path, today, max_age_days=int(settings.get("max_calendar_age_days", 14))))
+    try:
+        return bool(load_calendar(path, today, max_age_days=int(settings.get("max_calendar_age_days", 14))))
+    except CalendarError as exc:
+        # Only an absent private calendar falls back to the built-in one; a present but
+        # stale, unapproved, changed, or invalid calendar still fails closed.
+        if getattr(exc, "code", None) != "missing_calendar":
+            raise
+    return bool(load_default_calendar(today))
 
 
 def _safe_code(value: Any, default: str) -> str:

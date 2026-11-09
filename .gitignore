@@ -1,4 +1,4 @@
-# Private user inputs. District calendar references in calendar/ are public.
+# Private user inputs. The built-in school calendar is public date-only data in outputs/formfiller/default_calendar.py.
 Accommodation Log.txt
 **/forms.json
 **/settings.json

@@ -27,6 +27,7 @@ $expectedFiles = @(
     'formfiller\browser.py',
     'formfiller\calendar.py',
     'formfiller\calendar_xlsx.py',
+    'formfiller\default_calendar.py',
     'formfiller\deployment.py',
     'formfiller\migrate.py',
     'formfiller\monitor.py',

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools import audit_privacy
-from tools.audit_privacy import PUBLIC_CALENDAR, calendar_valid, inspect_file
+from tools.audit_privacy import inspect_file
 
 
 class PrivacyAuditTests(unittest.TestCase):
@@ -34,16 +34,6 @@ class PrivacyAuditTests(unittest.TestCase):
         prefix = 'https://forms.office.com/r?id='
         self.assertIn('non_synthetic_form_link', inspect_file('notes.md', (prefix + 'not-a-demo').encode()))
         self.assertEqual(inspect_file('tests/example.py', (prefix + 'synthetic-demo').encode()), [])
-
-    def test_public_calendar_rejects_extra_private_metadata(self):
-        with open(PUBLIC_CALENDAR, 'rb') as stream:
-            raw = stream.read()
-        self.assertTrue(calendar_valid(raw))
-        data = json.loads(raw)
-        data['workbook_path'] = 'private source location'
-        self.assertFalse(calendar_valid(json.dumps(data)))
-        self.assertEqual(inspect_file(PUBLIC_CALENDAR, json.dumps(data).encode()),
-                         ['calendar_contains_unapproved_fields_or_dates'])
 
     def run_staged_audit(self, folder):
         with patch.object(audit_privacy, 'ROOT', folder), contextlib.redirect_stdout(io.StringIO()) as output:

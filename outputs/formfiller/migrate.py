@@ -93,14 +93,16 @@ def _migrate(source_root, workspace_root, runtime_root, *, installed_app=None):
     if installed_app:
         from .deployment import validate_snapshot
         validate_snapshot(installed_app)
+    # A legacy checkout keeps one district workbook named "<district>_<year>_Instructional_Dates_Full_Text.xlsx".
+    workbooks = sorted(source.glob("*_Instructional_Dates_Full_Text.xlsx"))
+    legacy_workbook = workbooks[0] if len(workbooks) == 1 else source / "Instructional_Dates_Full_Text.xlsx"
     operations = [
         (outputs / "config" / "browser-profile", runtime / "browser-profile"),
         (outputs / "state", runtime / "state"),
         (outputs / "config", workspace / "config"),
         (outputs / "reports", workspace / "reports"),
         (source / "Accommodation Log.txt", workspace / "sources" / "Accommodation Log.txt"),
-        (source / "Pearland_2026-27_Instructional_Dates_Full_Text.xlsx",
-         workspace / "sources" / "Pearland_2026-27_Instructional_Dates_Full_Text.xlsx"),
+        (legacy_workbook, workspace / "sources" / legacy_workbook.name),
     ]
     operations = [(old, new) for old, new in operations if old.exists()]
     for old, new in operations:
@@ -118,7 +120,7 @@ def _migrate(source_root, workspace_root, runtime_root, *, installed_app=None):
     configured_calendar = Path(settings.get("calendar_path", "calendar.json")) if isinstance(settings, dict) else None
     relocate_setting = bool(configured_calendar and configured_calendar.is_absolute()
                             and configured_calendar.resolve() == calendar_path.resolve())
-    workbook_old = source / "Pearland_2026-27_Instructional_Dates_Full_Text.xlsx"
+    workbook_old = legacy_workbook
     workbook_new = workspace / "sources" / workbook_old.name
     relocate_calendar = bool(calendar and calendar.get("source_kind") == "district_workbook"
                              and Path(calendar.get("workbook_path", "")).resolve() == workbook_old)

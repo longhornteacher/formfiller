@@ -5,16 +5,12 @@ import argparse
 import json
 import re
 import subprocess
-from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_PARTS = {"config", "state", "reports", "logs", "observed", "browser-profile", ".venv", "__pycache__"}
 PRIVATE_NAMES = {"forms.json", "settings.json", "paths.json", "installation.json", ".formfiller-owner.json", "Accommodation Log.txt"}
-PUBLIC_CALENDAR = "calendar/Pearland_2026-27_SchoolDays.json"
-CALENDAR_KEYS = {"district", "school_year", "source", "complete", "coverage_start", "coverage_end",
-                 "school_days", "non_school_days", "early_release_days"}
 TEXT_SUFFIXES = {".py", ".ps1", ".bat", ".md", ".txt", ".html", ".js", ".css", ".svg"}
 PATTERNS = {
     "personal_windows_path": re.compile(r"(?i)(?:[A-Z]:[\\/]+Users[\\/]+[^\s\\/\"']+|OneDrive\s*-\s*)"),
@@ -26,32 +22,6 @@ PATTERNS = {
 FORM_LINK = re.compile(r"https://forms\.(?:office\.com|cloud\.microsoft)/[^\s\"'<>]*", re.I)
 
 
-def calendar_valid(raw):
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict) or set(data) != CALENDAR_KEYS:
-            return False
-        if (data["district"] != "Pearland ISD" or data["school_year"] != "2026-27"
-                or data["source"] != "SchoolDays" or data["complete"] is not True):
-            return False
-        def parse(value):
-            return date.fromisoformat(value) if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else None
-        start, end = parse(data["coverage_start"]), parse(data["coverage_end"])
-        if start is None or end is None or start > end:
-            return False
-        for key in ("school_days", "non_school_days", "early_release_days"):
-            values = data[key]
-            if not isinstance(values, list) or any(parse(value) is None or not start <= parse(value) <= end for value in values):
-                return False
-            if values != sorted(set(values)):
-                return False
-        school = set(data["school_days"])
-        return (len(school) == 171 and len(data["early_release_days"]) == 2
-                and set(data["early_release_days"]) <= school and not school & set(data["non_school_days"]))
-    except (ValueError, TypeError, KeyError):
-        return False
-
-
 def inspect_file(relative, raw):
     """Return sanitized finding codes only; never return a matched value."""
     path = Path(relative)
@@ -59,8 +29,6 @@ def inspect_file(relative, raw):
             or path.name.startswith(".env") or path.suffix.lower() in {".pem", ".key"}
             or relative.startswith("tools/artifacts/")):
         return ["private_file"]
-    if relative == PUBLIC_CALENDAR:
-        return [] if calendar_valid(raw) else ["calendar_contains_unapproved_fields_or_dates"]
     if (path.suffix.lower() not in TEXT_SUFFIXES and path.name not in {".gitignore", ".gitattributes"}
             and relative != ".githooks/pre-commit"):
         return ["unreviewed_file_type"]

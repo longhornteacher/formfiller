@@ -27,6 +27,7 @@ $sourceNames = @(
     'browser.py',
     'calendar.py',
     'calendar_xlsx.py',
+    'default_calendar.py',
     'deployment.py',
     'migrate.py',
     'monitor.py',

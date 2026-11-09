@@ -178,6 +178,54 @@ def load_calendar(
     raise CalendarError("missing_date", f"No SchoolDays row covers {requested.isoformat()}")
 
 
+def _default_calendar():
+    try:
+        from . import default_calendar as module
+    except ImportError:  # pragma: no cover - flat-module fallback used by packaging
+        import default_calendar as module  # type: ignore[no-redef]
+    return module
+
+
+def load_default_calendar(today: date | str) -> bool:
+    """Return whether ``today`` is a school day in the built-in calendar.
+
+    Fails closed: a date outside the built-in coverage raises
+    ``CalendarError(code="outside_coverage")``.
+    """
+    requested = _parse_date(today, "today")
+    module = _default_calendar()
+    start = _parse_date(module.COVERAGE_START, "coverage_start")
+    end = _parse_date(module.COVERAGE_END, "coverage_end")
+    if requested < start or requested > end:
+        raise CalendarError("outside_coverage", f"{requested.isoformat()} is outside calendar coverage")
+    return requested.isoformat() in module.SCHOOL_DAYS
+
+
+def default_calendar_summary() -> dict[str, Any]:
+    """Coverage facts about the built-in calendar, with no provenance."""
+    module = _default_calendar()
+    return {"coverage_start": module.COVERAGE_START, "coverage_end": module.COVERAGE_END,
+            "school_day_count": len(module.SCHOOL_DAYS)}
+
+
+def load_calendar_or_default(
+    path: str | os.PathLike[str],
+    today: date | str,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> bool:
+    """Use the private calendar at ``path``; fall back to the built-in one only if it is absent.
+
+    A private calendar that exists but is stale, unapproved, changed or invalid
+    still fails closed and is never silently replaced by the built-in one.
+    """
+    try:
+        return load_calendar(path, today, max_age_days=max_age_days)
+    except CalendarError as exc:
+        if exc.code != "missing_calendar":
+            raise
+    return load_default_calendar(today)
+
+
 def _parse_school_day(value: str, row_number: int) -> bool:
     normalized = value.strip().casefold()
     if normalized in {"true", "1", "yes"}:

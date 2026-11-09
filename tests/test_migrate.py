@@ -25,7 +25,7 @@ class MigrationTests(unittest.TestCase):
         state = self.source / 'outputs' / 'state' / '2026-10-02'
         state.mkdir(parents=True)
         (state / 'state.json').write_bytes(b'{"date":"2026-10-02","forms":{"F01":{"status":"submitted"}}}')
-        workbook = self.source / 'Pearland_2026-27_Instructional_Dates_Full_Text.xlsx'
+        workbook = self.source / 'Example_2026-27_Instructional_Dates_Full_Text.xlsx'
         workbook.write_bytes(b'synthetic workbook bytes')
         self.calendar = {'source_kind': 'district_workbook', 'workbook_path': str(workbook),
                          'workbook_sha256': 'unchanged even if source differs', 'approved': True,

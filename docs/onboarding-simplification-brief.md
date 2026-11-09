@@ -1,4 +1,4 @@
-# Brief: simpler install and onboarding for new PISD teachers
+# Brief: simpler install and onboarding for new teachers
 
 FormFiller is a **single-PC** app. A copy of it running on a second computer for the same user is unsupported and unsafe. Existing installations are not changed by this work.
 
@@ -14,13 +14,13 @@ FormFiller is a **single-PC** app. A copy of it running on a second computer for
 - Multi-PC handling: warn in the docs and in the UI. Keep the existing owner binding. Do not add detection or blocking.
 - Moving PCs: add Export/Import of forms and settings only. The export excludes sign-in data, submission state, locks, approvals and the calendar. The import prompts for re-review and re-approval of answers on the new PC.
 - Form name: when the user supplies a URL and the form is inspected, set the name to the pulled Form title. **Refresh questions / URL** updates the name unless the user has renamed it. Track this with a flag, for example `name_custom`. A rename sets the flag. Typed names are only a fallback when no title could be pulled.
-- PISD specifics remain the defaults. The district name is removed from user-facing text and replaced with neutral wording such as "district calendar".
+- District-specific defaults remain, but no district name appears in user-facing text or source; use neutral wording such as "school calendar".
 
 ## Work items
 
 ### 1. Settings (new Settings view, persisted in `settings.json`)
 - Submit window start and end (default 12:00 PM and 3:30 PM) and time zone (default America/Chicago). Replace the hardcoded values in `scheduling.py`, `windows_schedule.py` and `Install-SchoolDaySchedule.ps1`. Validate the values: start before end, valid IANA zone.
-- Calendar format defaults (PISD SchoolDays headers `Title`, `SchoolDate`, `DayOfWeek`, `DayType` pre-filled, overridable). Detect the standard format from the file and skip the manual header and timestamp entry when it matches.
+- Calendar format defaults (standard SchoolDays headers `Title`, `SchoolDate`, `DayOfWeek`, `DayType` pre-filled, overridable). Detect the standard format from the file and skip the manual header and timestamp entry when it matches.
 - Changing the window or time zone refreshes the scheduled tasks. It never submits.
 - Tests: settings validation, window and time-zone effects on slot planning, and task reconciliation.
 
@@ -30,7 +30,7 @@ FormFiller is a **single-PC** app. A copy of it running on a second computer for
 - Tests: fresh-install resolution with a temporary root, an existing-locator install unchanged, and no tkinter import on the new path.
 
 ### 3. Shipped default calendar
-- Ship the sanitized date-only PISD calendar from `calendar/` with the installed snapshot, labeled with its school year and coverage.
+- Ship the sanitized date-only calendar as `outputs/formfiller/default_calendar.py` with the installed snapshot (implemented; private calendars override it), labeled with its school year and coverage.
 - First run offers one action: **Review and confirm district calendar**. It shows every instructional date and the coverage range. The user must explicitly confirm that it matches the district calendar. Nothing is pre-approved.
 - Keep importing the user's own workbook as the alternative.
 - Coverage ends at the school year's end. A new school year needs a newly shipped or imported calendar.
