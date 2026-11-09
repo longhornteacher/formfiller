@@ -46,3 +46,6 @@ tools/artifacts/
 **/.venv/
 **/venv/
 .pytest_cache/
+
+# Local agent settings and worktrees.
+.claude/
